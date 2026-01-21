@@ -74,16 +74,7 @@ func newInitCommand() *cobra.Command {
 	return cmd
 }
 
-func newUpCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "up [services...]",
-		Short: "Start services",
-		Long:  "Start all services or specific services defined in docker-compose.yml.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not yet implemented")
-		},
-	}
-}
+// Up command is now in up.go
 
 func newDownCommand() *cobra.Command {
 	return &cobra.Command{
@@ -177,33 +168,7 @@ func newBuildCommand() *cobra.Command {
 	return cmd
 }
 
-func newConfigCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "config",
-		Short: "Configuration management",
-		Long:  "Manage space-cli configuration.",
-	}
-
-	cmd.AddCommand(&cobra.Command{
-		Use:   "show",
-		Short: "Show merged configuration",
-		Long:  "Display the final merged configuration from all sources.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not yet implemented")
-		},
-	})
-
-	cmd.AddCommand(&cobra.Command{
-		Use:   "validate",
-		Short: "Validate configuration",
-		Long:  "Check configuration for errors and warnings.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not yet implemented")
-		},
-	})
-
-	return cmd
-}
+// Config command is now in config.go
 
 func newDBCommand() *cobra.Command {
 	cmd := &cobra.Command{
