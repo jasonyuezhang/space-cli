@@ -117,7 +117,7 @@ func newUpCommand() *cobra.Command {
 			// Add override file if using DNS
 			if overrideFile != "" {
 				composeCmd = append(composeCmd, "-f", overrideFile)
-				defer os.Remove(overrideFile) // Clean up override file
+				fmt.Printf("📝 Using override file: %s\n", overrideFile)
 			}
 
 			// Add project name
@@ -151,7 +151,18 @@ func newUpCommand() *cobra.Command {
 				if useDNS {
 					cleanupDNSServer(ctx)
 				}
+				// Don't remove override file on failure so user can inspect it
+				if overrideFile != "" {
+					fmt.Printf("💡 Override file preserved for debugging: %s\n", overrideFile)
+				}
 				return fmt.Errorf("failed to start services: %w", err)
+			}
+
+			// Clean up override file on success
+			if overrideFile != "" {
+				if err := os.Remove(overrideFile); err != nil {
+					fmt.Printf("⚠️  Failed to cleanup override file: %v\n", err)
+				}
 			}
 
 			fmt.Println()
@@ -311,16 +322,48 @@ func startDNSServer(ctx context.Context, projectName string) error {
 
 // createNoPortsOverride creates a docker-compose override file that removes port bindings
 func createNoPortsOverride(workDir string, cfg *config.Config) (string, error) {
+	// Parse docker-compose.yml to find all services with ports
+	composeFile := filepath.Join(workDir, "docker-compose.yml")
+	if len(cfg.Project.ComposeFiles) > 0 {
+		composeFile = filepath.Join(workDir, cfg.Project.ComposeFiles[0])
+	}
+
+	// Read docker-compose.yml
+	composeData, err := os.ReadFile(composeFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read docker-compose.yml: %w", err)
+	}
+
+	// Parse YAML
+	var composeConfig map[string]interface{}
+	if err := yaml.Unmarshal(composeData, &composeConfig); err != nil {
+		return "", fmt.Errorf("failed to parse docker-compose.yml: %w", err)
+	}
+
 	// Create override content
 	override := map[string]interface{}{
 		"services": make(map[string]interface{}),
 	}
 
+	// Find all services with ports and create override entries
 	services := override["services"].(map[string]interface{})
-	for serviceName := range cfg.Services {
-		services[serviceName] = map[string]interface{}{
-			"ports": []string{}, // Remove all port bindings
+	removedPorts := []string{}
+	if composeServices, ok := composeConfig["services"].(map[string]interface{}); ok {
+		for serviceName, serviceConfig := range composeServices {
+			if svc, ok := serviceConfig.(map[string]interface{}); ok {
+				// Check if service has ports defined
+				if _, hasPort := svc["ports"]; hasPort {
+					services[serviceName] = map[string]interface{}{
+						"ports": []interface{}{}, // Remove all port bindings
+					}
+					removedPorts = append(removedPorts, serviceName)
+				}
+			}
 		}
+	}
+
+	if len(removedPorts) > 0 {
+		fmt.Printf("🔧 Removing port bindings for: %s\n", strings.Join(removedPorts, ", "))
 	}
 
 	// Write to temporary file
