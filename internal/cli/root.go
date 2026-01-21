@@ -75,17 +75,7 @@ func newInitCommand() *cobra.Command {
 }
 
 // Up command is now in up.go
-
-func newDownCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "down",
-		Short: "Stop and remove services",
-		Long:  "Stop all running services and remove containers, networks, and volumes.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not yet implemented")
-		},
-	}
-}
+// Down command is now in down.go
 
 func newStatusCommand() *cobra.Command {
 	return &cobra.Command{

@@ -1,14 +1,25 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/happy-sdk/space-cli/internal/dns"
+	"github.com/happy-sdk/space-cli/internal/provider"
 	"github.com/happy-sdk/space-cli/pkg/config"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+)
+
+var (
+	// Global DNS server for cleanup
+	globalDNSServer   *dns.Server
+	globalDNSResolver *dns.ResolverManager
 )
 
 func newUpCommand() *cobra.Command {
@@ -17,6 +28,8 @@ func newUpCommand() *cobra.Command {
 		Short: "Start services",
 		Long:  "Start all services or specific services defined in docker-compose.yml.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+
 			// Get working directory
 			workDir := Workdir
 			if workDir == "." {
@@ -54,6 +67,45 @@ func newUpCommand() *cobra.Command {
 			fmt.Printf("📁 Working directory: %s\n", workDir)
 			fmt.Println()
 
+			// Detect provider
+			detector := provider.NewDetector()
+			providerType, err := detector.Detect(ctx)
+			if err != nil {
+				fmt.Printf("⚠️  Failed to detect provider: %v\n", err)
+				providerType = provider.ProviderGeneric
+			}
+			fmt.Printf("🔍 Detected provider: %s\n", providerType.Description())
+
+			// Generate project name
+			projectName := generateProjectName(cfg, workDir)
+			fmt.Printf("📦 Project name: %s\n", projectName)
+
+			// Try to start DNS server if using OrbStack
+			useDNS := false
+			var overrideFile string
+			if providerType.SupportsContainerDNS() {
+				fmt.Println()
+				fmt.Println("🌐 Starting embedded DNS server for container access...")
+
+				if err := startDNSServer(ctx, projectName); err != nil {
+					fmt.Printf("⚠️  Failed to start DNS server: %v\n", err)
+					fmt.Println("⚠️  Falling back to port bindings")
+				} else {
+					useDNS = true
+					fmt.Println("✅ DNS server started successfully")
+					fmt.Printf("   Containers will be accessible at: *.orb.local\n")
+
+					// Create override file to remove port bindings
+					overrideFile, err = createNoPortsOverride(workDir, cfg)
+					if err != nil {
+						fmt.Printf("⚠️  Failed to create override file: %v\n", err)
+						// Continue anyway - docker-compose will use original ports
+					}
+				}
+			}
+
+			fmt.Println()
+
 			// Build docker compose command
 			composeCmd := []string{"docker", "compose"}
 
@@ -62,13 +114,14 @@ func newUpCommand() *cobra.Command {
 				composeCmd = append(composeCmd, "-f", file)
 			}
 
-			// Add project name
-			if cfg.Project.Name != "" {
-				// Generate project name based on naming strategy
-				projectName := generateProjectName(cfg, workDir)
-				composeCmd = append(composeCmd, "-p", projectName)
-				fmt.Printf("📦 Project name: %s\n", projectName)
+			// Add override file if using DNS
+			if overrideFile != "" {
+				composeCmd = append(composeCmd, "-f", overrideFile)
+				defer os.Remove(overrideFile) // Clean up override file
 			}
+
+			// Add project name
+			composeCmd = append(composeCmd, "-p", projectName)
 
 			// Add up command
 			composeCmd = append(composeCmd, "up", "-d")
@@ -94,11 +147,36 @@ func newUpCommand() *cobra.Command {
 			fmt.Println()
 
 			if err := dockerCmd.Run(); err != nil {
+				// Clean up DNS server on failure
+				if useDNS {
+					cleanupDNSServer(ctx)
+				}
 				return fmt.Errorf("failed to start services: %w", err)
 			}
 
 			fmt.Println()
 			fmt.Println("✅ Services started successfully!")
+			fmt.Println()
+
+			// Show access information
+			if useDNS {
+				fmt.Println("🌍 Access your services at:")
+				for serviceName, service := range cfg.Services {
+					if service.Port > 0 {
+						fmt.Printf("   • %s: http://%s.orb.local:%d\n", serviceName, serviceName, service.Port)
+					}
+				}
+			} else {
+				fmt.Println("🌍 Access your services at:")
+				for serviceName, service := range cfg.Services {
+					if service.ExternalPort > 0 {
+						fmt.Printf("   • %s: http://localhost:%d\n", serviceName, service.ExternalPort)
+					} else if service.Port > 0 {
+						fmt.Printf("   • %s: http://localhost:%d\n", serviceName, service.Port)
+					}
+				}
+			}
+
 			fmt.Println()
 			fmt.Println("💡 Tip: Run 'space config show' to see your configuration")
 			fmt.Println("💡 Tip: Run 'space status' to check service status")
@@ -161,4 +239,119 @@ func getGitBranch(workDir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// startDNSServer starts the embedded DNS server
+func startDNSServer(ctx context.Context, projectName string) error {
+	// Create logger
+	logger := dns.NewStdLogger()
+
+	// Create Docker client
+	dockerClient := dns.NewSimpleDockerClient(logger)
+
+	// Try alternative ports if 5353 is in use
+	ports := []int{5353, 5354, 5355, 5356}
+	var server *dns.Server
+	var dnsAddr string
+	var lastErr error
+
+	for _, port := range ports {
+		dnsAddr = fmt.Sprintf("127.0.0.1:%d", port)
+
+		// Create DNS server
+		var err error
+		server, err = dns.NewServer(dns.Config{
+			Addr:        dnsAddr,
+			Upstream:    "8.8.8.8:53",
+			ProjectName: projectName,
+			Domain:      "orb.local",
+			CacheTTL:    30 * time.Second,
+			Docker:      dockerClient,
+			Logger:      logger,
+		})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Start DNS server
+		if err := server.Start(ctx); err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Success!
+		break
+	}
+
+	if server == nil || !server.IsRunning() {
+		if lastErr != nil {
+			return fmt.Errorf("failed to start DNS server on any port: %w", lastErr)
+		}
+		return fmt.Errorf("failed to start DNS server")
+	}
+
+	// Store global reference for cleanup
+	globalDNSServer = server
+
+	// Create resolver manager
+	resolver := dns.NewResolverManager("orb.local", dnsAddr, logger)
+	globalDNSResolver = resolver
+
+	// Setup resolver (requires sudo)
+	fmt.Println("📝 Setting up DNS resolver (may require sudo password)...")
+	if err := resolver.Setup(ctx); err != nil {
+		// Clean up server if resolver setup fails
+		server.Stop()
+		return fmt.Errorf("failed to setup resolver: %w", err)
+	}
+
+	return nil
+}
+
+// createNoPortsOverride creates a docker-compose override file that removes port bindings
+func createNoPortsOverride(workDir string, cfg *config.Config) (string, error) {
+	// Create override content
+	override := map[string]interface{}{
+		"services": make(map[string]interface{}),
+	}
+
+	services := override["services"].(map[string]interface{})
+	for serviceName := range cfg.Services {
+		services[serviceName] = map[string]interface{}{
+			"ports": []string{}, // Remove all port bindings
+		}
+	}
+
+	// Write to temporary file
+	overrideFile := filepath.Join(workDir, ".space-override.yml")
+	data, err := yaml.Marshal(override)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(overrideFile, data, 0644); err != nil {
+		return "", err
+	}
+
+	return overrideFile, nil
+}
+
+// cleanupDNSServer stops the DNS server and cleans up resolver
+func cleanupDNSServer(ctx context.Context) {
+	if globalDNSResolver != nil {
+		fmt.Println("🧹 Cleaning up DNS resolver...")
+		if err := globalDNSResolver.Cleanup(ctx); err != nil {
+			fmt.Printf("⚠️  Failed to cleanup resolver: %v\n", err)
+		}
+		globalDNSResolver = nil
+	}
+
+	if globalDNSServer != nil {
+		fmt.Println("🛑 Stopping DNS server...")
+		if err := globalDNSServer.Stop(); err != nil {
+			fmt.Printf("⚠️  Failed to stop DNS server: %v\n", err)
+		}
+		globalDNSServer = nil
+	}
 }
