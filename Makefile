@@ -16,7 +16,7 @@ GOMOD=$(GOCMD) mod
 BUILD_DIR=bin
 
 # Version info
-VERSION?=dev
+VERSION?=$(shell cat VERSION 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -25,7 +25,7 @@ LDFLAGS=-ldflags "-X github.com/happy-sdk/space-cli/internal/cli.Version=$(VERSI
 	-X github.com/happy-sdk/space-cli/internal/cli.BuildTime=$(BUILD_TIME) \
 	-X github.com/happy-sdk/space-cli/internal/cli.GitCommit=$(GIT_COMMIT)"
 
-.PHONY: all build install clean test deps help
+.PHONY: all build install clean test deps help version version-patch version-minor version-major
 
 # Default target
 all: build
@@ -89,11 +89,21 @@ lint:
 run: build
 	@$(BUILD_DIR)/$(BINARY_NAME)
 
-## version: Show version
+## version: Show current version
 version:
-	@echo "Version: $(VERSION)"
-	@echo "Git Commit: $(GIT_COMMIT)"
-	@echo "Build Time: $(BUILD_TIME)"
+	@./scripts/version.sh get
+
+## version-patch: Bump patch version
+version-patch:
+	@./scripts/version.sh patch
+
+## version-minor: Bump minor version
+version-minor:
+	@./scripts/version.sh minor
+
+## version-major: Bump major version
+version-major:
+	@./scripts/version.sh major
 
 ## help: Show this help
 help:

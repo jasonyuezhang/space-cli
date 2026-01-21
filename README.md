@@ -2,6 +2,31 @@
 
 This directory contains prototypes and planning documents for extracting generic Docker Compose and VM management functionality from propel-cli into a separate `space-cli` repository.
 
+## Development
+
+### Version Management
+
+Space CLI uses [Semantic Versioning 2.0.0](https://semver.org/). Versions are automatically bumped on each commit based on commit message keywords:
+
+- **`[major]`** or **`[breaking]`** - Bumps major version (x.0.0)
+- **`[minor]`** or **`[feature]`** or **`[feat]`** - Bumps minor version (0.x.0)
+- **`[patch]`** or **default** - Bumps patch version (0.0.x)
+
+```bash
+# Show current version
+make version
+
+# Manual version bumps
+make version-patch  # 0.1.0 → 0.1.1
+make version-minor  # 0.1.0 → 0.2.0
+make version-major  # 0.1.0 → 1.0.0
+
+# Check version in binary
+space --version
+```
+
+See [VERSIONING.md](VERSIONING.md) for complete documentation.
+
 ## Contents
 
 ### Planning Documents
@@ -9,6 +34,7 @@ This directory contains prototypes and planning documents for extracting generic
 - **`../MIGRATION_PLAN.md`** - Complete 4-week migration plan with phases and tasks
 - **`EXTRACTION_CHECKLIST.md`** - Detailed checklist of files to extract and changes needed
 - **`ARCHITECTURE.md`** - Architecture diagrams and component breakdown
+- **`VERSIONING.md`** - Semantic versioning guide and workflow
 
 ### Prototypes
 
