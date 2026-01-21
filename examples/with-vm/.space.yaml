@@ -1,0 +1,64 @@
+# Example configuration for VM-based development
+# This shows how to use space-cli with a virtual machine
+
+project:
+  name: myapp
+  naming_strategy: git-branch
+
+# Enable VM-based development
+vm:
+  enabled: true
+  provider: auto  # auto-detect Lima or OrbStack VM
+  cpus: 4
+  memory: "8GB"
+  disk: "50GB"
+  mount_type: reverse-sshfs  # or 9p, virtiofs
+
+  # Dependencies to install in the VM
+  dependencies:
+    - docker
+    - docker-compose
+    - git
+    - make
+    - curl
+
+  # Commands to run on VM startup
+  startup_commands:
+    - "echo 'VM is ready!'"
+    - "docker version"
+
+  # Lima-specific configuration (used when provider is lima)
+  lima:
+    template: docker
+    arch: host  # or x86_64, aarch64
+
+  # OrbStack VM configuration (used when provider is orbstack)
+  orbstack_vm:
+    distribution: ubuntu
+    version: "22.04"
+
+services:
+  app:
+    port: 3000
+    shell: /bin/bash
+    health_check:
+      enabled: true
+      endpoint: /health
+      timeout: 5s
+
+  postgres:
+    port: 5432
+
+databases:
+  - name: myapp_development
+    service: postgres
+    type: postgres
+    user: postgres
+    auto_create: true
+
+provider:
+  type: auto
+
+ports:
+  range_start: 14000
+  range_end: 14999

@@ -1,0 +1,24 @@
+# Generic Node.js application configuration
+# Minimal config - most things auto-discovered
+
+project:
+  naming_strategy: directory  # Use directory name instead of git branch
+
+services:
+  app:
+    port: 3000
+    shell: /bin/sh
+    environment:
+      NODE_ENV: development
+
+  mongodb:
+    port: 27017
+
+databases:
+  - name: myapp
+    service: mongodb
+    type: mongodb
+    auto_create: true
+
+# Using defaults for everything else
+# Provider auto-detected, ports auto-allocated

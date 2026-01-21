@@ -1,0 +1,48 @@
+# Generic Rails application configuration
+# This shows how a Rails app would use space-cli
+
+project:
+  name: myapp
+  naming_strategy: git-branch
+
+services:
+  web:
+    port: 3000
+    shell: /bin/bash
+    health_check:
+      enabled: true
+      endpoint: /health
+      timeout: 5s
+
+  sidekiq:
+    shell: /bin/bash
+
+  postgres:
+    port: 5432
+
+  redis:
+    port: 6379
+
+databases:
+  - name: myapp_development
+    service: postgres
+    type: postgres
+    user: postgres
+    auto_create: true
+    migrations_command: "docker compose exec web rails db:migrate"
+    seed_command: "docker compose exec web rails db:seed"
+
+commands:
+  seed: "docker compose exec web rails db:seed"
+  migrate: "docker compose exec web rails db:migrate"
+  custom:
+    console: "docker compose exec web rails console"
+    routes: "docker compose exec web rails routes"
+    test: "docker compose exec web rails test"
+
+provider:
+  type: auto
+
+ports:
+  range_start: 13000
+  range_end: 13999
