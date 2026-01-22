@@ -93,7 +93,7 @@ func newUpCommand() *cobra.Command {
 				} else {
 					useDNS = true
 					fmt.Println("✅ DNS server started successfully")
-					fmt.Printf("   Containers will be accessible at: *.orb.local\n")
+					fmt.Printf("   Containers will be accessible at: *.space.local\n")
 
 					// Create override file to remove port bindings
 					overrideFile, err = createNoPortsOverride(workDir, cfg)
@@ -174,7 +174,7 @@ func newUpCommand() *cobra.Command {
 				fmt.Println("🌍 Access your services at:")
 				for serviceName, service := range cfg.Services {
 					if service.Port > 0 {
-						fmt.Printf("   • %s: http://%s.orb.local:%d\n", serviceName, serviceName, service.Port)
+						fmt.Printf("   • %s: http://%s.space.local:%d\n", serviceName, serviceName, service.Port)
 					}
 				}
 			} else {
@@ -275,7 +275,7 @@ func startDNSServer(ctx context.Context, projectName string) error {
 			Addr:        dnsAddr,
 			Upstream:    "8.8.8.8:53",
 			ProjectName: projectName,
-			Domain:      "orb.local",
+			Domain:      "space.local",
 			CacheTTL:    30 * time.Second,
 			Docker:      dockerClient,
 			Logger:      logger,
@@ -306,7 +306,7 @@ func startDNSServer(ctx context.Context, projectName string) error {
 	globalDNSServer = server
 
 	// Create resolver manager
-	resolver := dns.NewResolverManager("orb.local", dnsAddr, logger)
+	resolver := dns.NewResolverManager("space.local", dnsAddr, logger)
 	globalDNSResolver = resolver
 
 	// Setup resolver (requires sudo)
@@ -353,8 +353,24 @@ func createNoPortsOverride(workDir string, cfg *config.Config) (string, error) {
 			if svc, ok := serviceConfig.(map[string]interface{}); ok {
 				// Check if service has ports defined
 				if _, hasPort := svc["ports"]; hasPort {
+					// Extract container ports for expose directive
+					containerPorts := []string{}
+					if portsArray, ok := svc["ports"].([]interface{}); ok {
+						for _, portDef := range portsArray {
+							if portStr, ok := portDef.(string); ok {
+								// Parse port mapping (can be "5432:5432" or just "5432")
+								parts := strings.Split(portStr, ":")
+								containerPort := parts[len(parts)-1] // Get the container port (last part)
+								containerPorts = append(containerPorts, containerPort)
+							} else if portNum, ok := portDef.(int); ok {
+								containerPorts = append(containerPorts, fmt.Sprintf("%d", portNum))
+							}
+						}
+					}
+
+					// Use expose instead of ports - this makes the port available to Docker network only
 					services[serviceName] = map[string]interface{}{
-						"ports": []interface{}{}, // Remove all port bindings
+						"expose": containerPorts,
 					}
 					removedPorts = append(removedPorts, serviceName)
 				}
@@ -363,17 +379,33 @@ func createNoPortsOverride(workDir string, cfg *config.Config) (string, error) {
 	}
 
 	if len(removedPorts) > 0 {
-		fmt.Printf("🔧 Removing port bindings for: %s\n", strings.Join(removedPorts, ", "))
+		fmt.Printf("🔧 Removing host port bindings for: %s\n", strings.Join(removedPorts, ", "))
+		fmt.Printf("   Ports will be accessible via DNS at: *.space.local\n")
 	}
 
-	// Write to temporary file
+	// Write to temporary file with explicit note
 	overrideFile := filepath.Join(workDir, ".space-override.yml")
-	data, err := yaml.Marshal(override)
-	if err != nil {
-		return "", err
+
+	// Create YAML content manually to ensure proper formatting
+	// We need to explicitly NOT include the 'ports' key to prevent merging
+	var yamlContent strings.Builder
+	yamlContent.WriteString("# Auto-generated override for DNS mode\n")
+	yamlContent.WriteString("# This file removes host port bindings and uses DNS instead\n")
+	yamlContent.WriteString("services:\n")
+
+	for serviceName, serviceConfig := range services {
+		yamlContent.WriteString(fmt.Sprintf("  %s:\n", serviceName))
+		if svcMap, ok := serviceConfig.(map[string]interface{}); ok {
+			if expose, ok := svcMap["expose"].([]string); ok && len(expose) > 0 {
+				yamlContent.WriteString("    expose:\n")
+				for _, port := range expose {
+					yamlContent.WriteString(fmt.Sprintf("      - \"%s\"\n", port))
+				}
+			}
+		}
 	}
 
-	if err := os.WriteFile(overrideFile, data, 0644); err != nil {
+	if err := os.WriteFile(overrideFile, []byte(yamlContent.String()), 0644); err != nil {
 		return "", err
 	}
 
