@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/happy-sdk/space-cli/internal/dns"
+	"github.com/happy-sdk/space-cli/internal/hooks/vite"
 	"github.com/happy-sdk/space-cli/internal/provider"
 	"github.com/happy-sdk/space-cli/pkg/config"
 	"github.com/spf13/cobra"
@@ -205,6 +206,11 @@ func newUpCommand() *cobra.Command {
 				fmt.Println("   Use 'space dns stop' to stop the daemon")
 			}
 			fmt.Println()
+
+			// Run post-up hooks (Vite integration)
+			if useDNS {
+				runPostUpHooks(workDir, projectName, cfg)
+			}
 
 			// Show access information
 			if useDNS {
@@ -649,5 +655,107 @@ func cleanupDNSServer(ctx context.Context) {
 		if err := removeDNSState(); err != nil {
 			fmt.Printf("⚠️  Failed to remove DNS state: %v\n", err)
 		}
+	}
+}
+
+// runPostUpHooks runs post-up hooks including Vite integration
+func runPostUpHooks(workDir, projectName string, cfg *config.Config) {
+	// Check if Vite hooks are enabled (auto-detect by default)
+	autoDetect := true
+	if cfg.Hooks.Vite != nil {
+		if !cfg.Hooks.Vite.Enabled && !cfg.Hooks.Vite.AutoDetect {
+			return // Vite hooks explicitly disabled
+		}
+		autoDetect = cfg.Hooks.Vite.AutoDetect
+	}
+
+	// Create Vite hook
+	viteHook, err := vite.NewHook(workDir)
+	if err != nil {
+		fmt.Printf("⚠️  Failed to initialize Vite hook: %v\n", err)
+		return
+	}
+
+	// Detect if this is a Vite project
+	detection, err := viteHook.Detector().Detect()
+	if err != nil {
+		fmt.Printf("⚠️  Vite detection failed: %v\n", err)
+		return
+	}
+
+	if !detection.IsViteProject {
+		return // Not a Vite project
+	}
+
+	fmt.Println()
+	fmt.Println("🎨 Vite project detected, configuring for DNS mode...")
+
+	// Build service configs from space config or use configured env vars
+	var services []vite.ServiceEnvConfig
+
+	if cfg.Hooks.Vite != nil && len(cfg.Hooks.Vite.EnvVars) > 0 {
+		// Use explicitly configured env vars
+		for envVar, serviceRef := range cfg.Hooks.Vite.EnvVars {
+			// Parse service:port format
+			parts := strings.Split(serviceRef, ":")
+			serviceName := parts[0]
+			port := 0
+			if len(parts) > 1 {
+				fmt.Sscanf(parts[1], "%d", &port)
+			} else if svc, ok := cfg.Services[serviceName]; ok {
+				port = svc.Port
+			}
+
+			if port > 0 {
+				services = append(services, vite.ServiceEnvConfig{
+					ServiceName: serviceName,
+					Port:        port,
+					EnvVarName:  envVar,
+				})
+			}
+		}
+	} else if autoDetect {
+		// Auto-detect services from config
+		for serviceName, svcConfig := range cfg.Services {
+			if svcConfig.Port > 0 {
+				services = append(services, vite.ServiceEnvConfig{
+					ServiceName: serviceName,
+					Port:        svcConfig.Port,
+				})
+			}
+		}
+	}
+
+	if len(services) == 0 {
+		fmt.Println("   No services configured for Vite integration")
+		return
+	}
+
+	// Execute Vite hook
+	result, err := viteHook.ExecuteWithServices(services)
+	if err != nil {
+		fmt.Printf("⚠️  Vite hook failed: %v\n", err)
+		return
+	}
+
+	// Report results
+	if result.EnvResult != nil && result.EnvResult.Generated {
+		fmt.Printf("   ✅ Generated %s\n", result.EnvResult.FilePath)
+		for varName, value := range result.EnvResult.Variables {
+			fmt.Printf("      %s=%s\n", varName, value)
+		}
+	}
+
+	if result.ConfigResult != nil {
+		if result.ConfigResult.Updated {
+			fmt.Printf("   ✅ Updated %s with server.allowedHosts\n", result.ConfigResult.FilePath)
+		} else if result.ConfigResult.AlreadyPresent {
+			fmt.Printf("   ℹ️  %s already has space.local in allowedHosts\n", result.ConfigResult.FilePath)
+		}
+	}
+
+	// Report any errors
+	for _, hookErr := range result.Errors {
+		fmt.Printf("   ⚠️  %v\n", hookErr)
 	}
 }

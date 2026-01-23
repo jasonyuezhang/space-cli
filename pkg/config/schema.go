@@ -27,6 +27,9 @@ type Config struct {
 
 	// Ports configuration
 	Ports PortsConfig `yaml:"ports,omitempty" json:"ports,omitempty"`
+
+	// Hooks configuration
+	Hooks HooksConfig `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 }
 
 // ProjectConfig defines project-level settings
@@ -216,6 +219,57 @@ type PortsConfig struct {
 	// Strategy for port allocation: "sequential", "random"
 	// Default: "sequential"
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+}
+
+// HooksConfig defines hooks configuration
+type HooksConfig struct {
+	// Vite-specific hooks for frontend development
+	Vite *ViteHooksConfig `yaml:"vite,omitempty" json:"vite,omitempty"`
+
+	// Custom hooks for arbitrary commands
+	Custom []CustomHookConfig `yaml:"custom,omitempty" json:"custom,omitempty"`
+}
+
+// ViteHooksConfig defines Vite-specific hook settings
+type ViteHooksConfig struct {
+	// Enabled enables Vite hooks
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// AutoDetect automatically detects Vite projects and configures hooks
+	AutoDetect bool `yaml:"auto_detect,omitempty" json:"auto_detect,omitempty"`
+
+	// EnvVars maps environment variable names to service references
+	// Example: VITE_API_BASE_URL -> "api-server:6060"
+	EnvVars map[string]string `yaml:"env_vars,omitempty" json:"env_vars,omitempty"`
+
+	// AllowedHostsPattern for Vite's server.host configuration
+	// Default: derived from network.allowed_hosts
+	AllowedHostsPattern string `yaml:"allowed_hosts_pattern,omitempty" json:"allowed_hosts_pattern,omitempty"`
+}
+
+// CustomHookConfig defines a custom hook configuration
+type CustomHookConfig struct {
+	// Name is the unique identifier for the hook
+	Name string `yaml:"name" json:"name"`
+
+	// Events that trigger this hook
+	// Supported: "pre-up", "post-up", "pre-down", "post-down", "on-dns-ready"
+	Events []string `yaml:"events" json:"events"`
+
+	// Command to execute when the hook is triggered
+	Command string `yaml:"command" json:"command"`
+
+	// Environment variables to set when running the command
+	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
+
+	// WorkDir overrides the working directory for the command
+	WorkDir string `yaml:"work_dir,omitempty" json:"work_dir,omitempty"`
+
+	// Timeout for command execution (default: 30s)
+	Timeout time.Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+
+	// ContinueOnError if true, doesn't fail the operation if hook fails
+	ContinueOnError bool `yaml:"continue_on_error,omitempty" json:"continue_on_error,omitempty"`
 }
 
 // VMConfig defines VM configuration
@@ -433,6 +487,33 @@ func (c *Config) Merge(other *Config) *Config {
 	}
 	if len(other.VM.StartupCommands) > 0 {
 		merged.VM.StartupCommands = other.VM.StartupCommands
+	}
+
+	// Merge hooks config
+	if other.Hooks.Vite != nil {
+		if merged.Hooks.Vite == nil {
+			merged.Hooks.Vite = &ViteHooksConfig{}
+		}
+		if other.Hooks.Vite.Enabled {
+			merged.Hooks.Vite.Enabled = other.Hooks.Vite.Enabled
+		}
+		if other.Hooks.Vite.AutoDetect {
+			merged.Hooks.Vite.AutoDetect = other.Hooks.Vite.AutoDetect
+		}
+		if other.Hooks.Vite.AllowedHostsPattern != "" {
+			merged.Hooks.Vite.AllowedHostsPattern = other.Hooks.Vite.AllowedHostsPattern
+		}
+		if len(other.Hooks.Vite.EnvVars) > 0 {
+			if merged.Hooks.Vite.EnvVars == nil {
+				merged.Hooks.Vite.EnvVars = make(map[string]string)
+			}
+			for k, v := range other.Hooks.Vite.EnvVars {
+				merged.Hooks.Vite.EnvVars[k] = v
+			}
+		}
+	}
+	if len(other.Hooks.Custom) > 0 {
+		merged.Hooks.Custom = other.Hooks.Custom
 	}
 
 	return &merged
