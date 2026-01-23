@@ -55,6 +55,7 @@ func init() {
 	rootCmd.AddCommand(newDBCommand())
 	rootCmd.AddCommand(newVMCommand())
 	rootCmd.AddCommand(newMigrateCommand())
+	rootCmd.AddCommand(newDNSCommand())
 }
 
 // Placeholder commands - to be implemented

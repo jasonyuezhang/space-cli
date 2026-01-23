@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/happy-sdk/space-cli/internal/dns"
@@ -85,20 +86,39 @@ func newUpCommand() *cobra.Command {
 			var overrideFile string
 			if providerType.SupportsContainerDNS() {
 				fmt.Println()
-				fmt.Println("🌐 Starting embedded DNS server for container access...")
 
-				if err := startDNSServer(ctx, projectName); err != nil {
-					fmt.Printf("⚠️  Failed to start DNS server: %v\n", err)
-					fmt.Println("⚠️  Falling back to port bindings")
-				} else {
+				// Check if DNS daemon is already running
+				if isDNSServerRunning() {
+					state, _ := loadDNSState()
+					fmt.Printf("✅ Using existing space-dns-daemon on %s\n", state.Address)
 					useDNS = true
-					fmt.Println("✅ DNS server started successfully")
+				} else {
+					// Start DNS daemon as background process
+					fmt.Println("🌐 Starting space-dns-daemon in background...")
+					if err := spawnDNSDaemon(); err != nil {
+						fmt.Printf("⚠️  Failed to start DNS daemon: %v\n", err)
+						fmt.Println("⚠️  Falling back to port bindings")
+					} else {
+						// Wait a moment for daemon to start
+						time.Sleep(500 * time.Millisecond)
+
+						if isDNSServerRunning() {
+							state, _ := loadDNSState()
+							fmt.Printf("✅ DNS daemon started on %s\n", state.Address)
+							useDNS = true
+						} else {
+							fmt.Println("⚠️  DNS daemon failed to start, falling back to port bindings")
+						}
+					}
+				}
+
+				if useDNS {
 					fmt.Printf("   Containers will be accessible at: *.space.local\n")
 
-					// Create override file to remove port bindings
-					overrideFile, err = createNoPortsOverride(workDir, cfg)
+					// Create modified compose file without port bindings
+					overrideFile, err = createDNSModeCompose(workDir, cfg)
 					if err != nil {
-						fmt.Printf("⚠️  Failed to create override file: %v\n", err)
+						fmt.Printf("⚠️  Failed to create DNS mode compose file: %v\n", err)
 						// Continue anyway - docker-compose will use original ports
 					}
 				}
@@ -109,15 +129,15 @@ func newUpCommand() *cobra.Command {
 			// Build docker compose command
 			composeCmd := []string{"docker", "compose"}
 
-			// Add compose files
-			for _, file := range cfg.Project.ComposeFiles {
-				composeCmd = append(composeCmd, "-f", file)
-			}
-
-			// Add override file if using DNS
+			// Use DNS mode compose file if available, otherwise use original files
 			if overrideFile != "" {
 				composeCmd = append(composeCmd, "-f", overrideFile)
-				fmt.Printf("📝 Using override file: %s\n", overrideFile)
+				fmt.Printf("📝 Using DNS mode compose file: %s\n", overrideFile)
+			} else {
+				// Add compose files
+				for _, file := range cfg.Project.ComposeFiles {
+					composeCmd = append(composeCmd, "-f", file)
+				}
 			}
 
 			// Add project name
@@ -147,26 +167,43 @@ func newUpCommand() *cobra.Command {
 			fmt.Println()
 
 			if err := dockerCmd.Run(); err != nil {
-				// Clean up DNS server on failure
-				if useDNS {
-					cleanupDNSServer(ctx)
+				// Stop DNS server on failure (but keep resolver configured)
+				if useDNS && globalDNSServer != nil {
+					fmt.Println("🛑 Stopping space-dns-daemon...")
+					if err := globalDNSServer.Stop(); err != nil {
+						fmt.Printf("⚠️  Failed to stop DNS daemon: %v\n", err)
+					}
+					globalDNSServer = nil
+					// Remove DNS state file on failure
+					if err := removeDNSState(); err != nil {
+						fmt.Printf("⚠️  Failed to remove DNS state: %v\n", err)
+					}
+					// Note: We intentionally do NOT remove the resolver file
+					// It's meant to be permanent once configured
 				}
-				// Don't remove override file on failure so user can inspect it
+				// Don't remove DNS mode compose file on failure so user can inspect it
 				if overrideFile != "" {
-					fmt.Printf("💡 Override file preserved for debugging: %s\n", overrideFile)
+					fmt.Printf("💡 DNS mode compose file preserved for debugging: %s\n", overrideFile)
 				}
 				return fmt.Errorf("failed to start services: %w", err)
 			}
 
-			// Clean up override file on success
+			// Clean up DNS mode compose file on success
 			if overrideFile != "" {
 				if err := os.Remove(overrideFile); err != nil {
-					fmt.Printf("⚠️  Failed to cleanup override file: %v\n", err)
+					fmt.Printf("⚠️  Failed to cleanup DNS mode compose file: %v\n", err)
 				}
 			}
 
 			fmt.Println()
 			fmt.Println("✅ Services started successfully!")
+
+			// Show DNS daemon status
+			if useDNS {
+				fmt.Println("🔄 space-dns-daemon is running in the background")
+				fmt.Println("   Use 'space dns status' to check status")
+				fmt.Println("   Use 'space dns stop' to stop the daemon")
+			}
 			fmt.Println()
 
 			// Show access information
@@ -252,8 +289,17 @@ func getGitBranch(workDir string) string {
 	return strings.TrimSpace(string(output))
 }
 
-// startDNSServer starts the embedded DNS server
+// startDNSServer starts the embedded DNS server as a persistent daemon
 func startDNSServer(ctx context.Context, projectName string) error {
+	// Check if DNS server is already running
+	if isDNSServerRunning() {
+		dnsState, err := loadDNSState()
+		if err == nil {
+			fmt.Printf("✅ DNS server already running on %s\n", dnsState.Address)
+			return nil
+		}
+	}
+
 	// Create logger
 	logger := dns.NewStdLogger()
 
@@ -285,8 +331,8 @@ func startDNSServer(ctx context.Context, projectName string) error {
 			continue
 		}
 
-		// Start DNS server
-		if err := server.Start(ctx); err != nil {
+		// Start DNS server with background context so it persists
+		if err := server.Start(context.Background()); err != nil {
 			lastErr = err
 			continue
 		}
@@ -302,7 +348,7 @@ func startDNSServer(ctx context.Context, projectName string) error {
 		return fmt.Errorf("failed to start DNS server")
 	}
 
-	// Store global reference for cleanup
+	// Store global reference
 	globalDNSServer = server
 
 	// Create resolver manager
@@ -317,12 +363,18 @@ func startDNSServer(ctx context.Context, projectName string) error {
 		return fmt.Errorf("failed to setup resolver: %w", err)
 	}
 
+	// Save DNS server state for persistence
+	if err := saveDNSState(dnsAddr, projectName); err != nil {
+		fmt.Printf("⚠️  Failed to save DNS state: %v\n", err)
+		// Don't fail - DNS server is running even if state save failed
+	}
+
 	return nil
 }
 
-// createNoPortsOverride creates a docker-compose override file that removes port bindings
-func createNoPortsOverride(workDir string, cfg *config.Config) (string, error) {
-	// Parse docker-compose.yml to find all services with ports
+// createDNSModeCompose creates a modified docker-compose file without port bindings for DNS mode
+func createDNSModeCompose(workDir string, cfg *config.Config) (string, error) {
+	// Get the original compose file
 	composeFile := filepath.Join(workDir, "docker-compose.yml")
 	if len(cfg.Project.ComposeFiles) > 0 {
 		composeFile = filepath.Join(workDir, cfg.Project.ComposeFiles[0])
@@ -340,38 +392,36 @@ func createNoPortsOverride(workDir string, cfg *config.Config) (string, error) {
 		return "", fmt.Errorf("failed to parse docker-compose.yml: %w", err)
 	}
 
-	// Create override content
-	override := map[string]interface{}{
-		"services": make(map[string]interface{}),
-	}
-
-	// Find all services with ports and create override entries
-	services := override["services"].(map[string]interface{})
+	// Process services to remove port bindings
 	removedPorts := []string{}
 	if composeServices, ok := composeConfig["services"].(map[string]interface{}); ok {
 		for serviceName, serviceConfig := range composeServices {
 			if svc, ok := serviceConfig.(map[string]interface{}); ok {
 				// Check if service has ports defined
-				if _, hasPort := svc["ports"]; hasPort {
+				if portsArray, hasPort := svc["ports"]; hasPort {
 					// Extract container ports for expose directive
-					containerPorts := []string{}
-					if portsArray, ok := svc["ports"].([]interface{}); ok {
-						for _, portDef := range portsArray {
+					containerPorts := []interface{}{}
+					if ports, ok := portsArray.([]interface{}); ok {
+						for _, portDef := range ports {
 							if portStr, ok := portDef.(string); ok {
 								// Parse port mapping (can be "5432:5432" or just "5432")
 								parts := strings.Split(portStr, ":")
 								containerPort := parts[len(parts)-1] // Get the container port (last part)
 								containerPorts = append(containerPorts, containerPort)
 							} else if portNum, ok := portDef.(int); ok {
-								containerPorts = append(containerPorts, fmt.Sprintf("%d", portNum))
+								containerPorts = append(containerPorts, portNum)
 							}
 						}
 					}
 
-					// Use expose instead of ports - this makes the port available to Docker network only
-					services[serviceName] = map[string]interface{}{
-						"expose": containerPorts,
+					// Remove ports binding
+					delete(svc, "ports")
+
+					// Add expose if not already present
+					if _, hasExpose := svc["expose"]; !hasExpose && len(containerPorts) > 0 {
+						svc["expose"] = containerPorts
 					}
+
 					removedPorts = append(removedPorts, serviceName)
 				}
 			}
@@ -383,33 +433,136 @@ func createNoPortsOverride(workDir string, cfg *config.Config) (string, error) {
 		fmt.Printf("   Ports will be accessible via DNS at: *.space.local\n")
 	}
 
-	// Write to temporary file with explicit note
-	overrideFile := filepath.Join(workDir, ".space-override.yml")
+	// Write modified compose file
+	dnsComposeFile := filepath.Join(workDir, ".space-dns-compose.yml")
 
-	// Create YAML content manually to ensure proper formatting
-	// We need to explicitly NOT include the 'ports' key to prevent merging
-	var yamlContent strings.Builder
-	yamlContent.WriteString("# Auto-generated override for DNS mode\n")
-	yamlContent.WriteString("# This file removes host port bindings and uses DNS instead\n")
-	yamlContent.WriteString("services:\n")
-
-	for serviceName, serviceConfig := range services {
-		yamlContent.WriteString(fmt.Sprintf("  %s:\n", serviceName))
-		if svcMap, ok := serviceConfig.(map[string]interface{}); ok {
-			if expose, ok := svcMap["expose"].([]string); ok && len(expose) > 0 {
-				yamlContent.WriteString("    expose:\n")
-				for _, port := range expose {
-					yamlContent.WriteString(fmt.Sprintf("      - \"%s\"\n", port))
-				}
-			}
-		}
+	// Marshal back to YAML
+	modifiedData, err := yaml.Marshal(composeConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal modified compose: %w", err)
 	}
 
-	if err := os.WriteFile(overrideFile, []byte(yamlContent.String()), 0644); err != nil {
-		return "", err
+	// Add header comment
+	header := "# Auto-generated DNS mode compose file\n"
+	header += "# This file has all port bindings removed - services accessible via DNS at *.space.local\n"
+	header += "# Generated from: " + filepath.Base(composeFile) + "\n\n"
+
+	finalContent := header + string(modifiedData)
+
+	if err := os.WriteFile(dnsComposeFile, []byte(finalContent), 0644); err != nil {
+		return "", fmt.Errorf("failed to write DNS mode compose file: %w", err)
 	}
 
-	return overrideFile, nil
+	return dnsComposeFile, nil
+}
+
+// DNSState represents the state of the running DNS daemon
+type DNSState struct {
+	Address     string    `json:"address"`
+	ProjectName string    `json:"project_name"`
+	StartTime   time.Time `json:"start_time"`
+	PID         int       `json:"pid"`
+}
+
+// spawnDNSDaemon spawns the DNS daemon as a detached background process
+func spawnDNSDaemon() error {
+	// Get the path to the current executable
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Create log file for DNS daemon output
+	logPath := filepath.Join(os.TempDir(), "space-dns-daemon.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create log file: %w", err)
+	}
+
+	// Spawn "space dns start" as a background process
+	cmd := exec.Command(execPath, "dns", "start")
+
+	// Redirect output to log file
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+
+	// Set process group to detach from parent
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	// Start the process in the background
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return fmt.Errorf("failed to spawn DNS daemon: %w", err)
+	}
+
+	// Don't wait for the process - let it run independently
+	// Note: We don't close logFile here - the child process needs it
+
+	fmt.Printf("   DNS daemon log: %s\n", logPath)
+
+	return nil
+}
+
+// getDNSStateFile returns the path to the DNS state file
+func getDNSStateFile() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ".space-dns-daemon.json"
+	}
+	return filepath.Join(homeDir, ".space-dns-daemon.json")
+}
+
+// saveDNSState saves the DNS daemon state to a file
+func saveDNSState(address, projectName string) error {
+	state := DNSState{
+		Address:     address,
+		ProjectName: projectName,
+		StartTime:   time.Now(),
+		PID:         os.Getpid(),
+	}
+
+	data, err := yaml.Marshal(state)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(getDNSStateFile(), data, 0644)
+}
+
+// loadDNSState loads the DNS daemon state from file
+func loadDNSState() (*DNSState, error) {
+	data, err := os.ReadFile(getDNSStateFile())
+	if err != nil {
+		return nil, err
+	}
+
+	var state DNSState
+	if err := yaml.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+
+	return &state, nil
+}
+
+// isDNSServerRunning checks if the DNS daemon is running
+func isDNSServerRunning() bool {
+	state, err := loadDNSState()
+	if err != nil {
+		return false
+	}
+
+	// Check if process is still running (simple check)
+	// Note: This is a basic check - could be improved with actual process verification
+	_, err = os.ReadFile(getDNSStateFile())
+	return err == nil && state.Address != ""
+}
+
+// removeDNSState removes the DNS state file
+func removeDNSState() error {
+	return os.Remove(getDNSStateFile())
 }
 
 // cleanupDNSServer stops the DNS server and cleans up resolver
@@ -423,10 +576,15 @@ func cleanupDNSServer(ctx context.Context) {
 	}
 
 	if globalDNSServer != nil {
-		fmt.Println("🛑 Stopping DNS server...")
+		fmt.Println("🛑 Stopping space-dns-daemon...")
 		if err := globalDNSServer.Stop(); err != nil {
-			fmt.Printf("⚠️  Failed to stop DNS server: %v\n", err)
+			fmt.Printf("⚠️  Failed to stop DNS daemon: %v\n", err)
 		}
 		globalDNSServer = nil
+
+		// Remove state file
+		if err := removeDNSState(); err != nil {
+			fmt.Printf("⚠️  Failed to remove DNS state: %v\n", err)
+		}
 	}
 }
