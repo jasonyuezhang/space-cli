@@ -35,3 +35,6 @@ Thumbs.db
 # Build artifacts
 dist/
 build/
+
+# Compiled binary in root
+/space
