@@ -193,6 +193,10 @@ type NetworkConfig struct {
 
 	// CustomDomain for accessing services
 	CustomDomain string `yaml:"custom_domain,omitempty" json:"custom_domain,omitempty"`
+
+	// DNSHashing enables directory-based hashing for DNS names to prevent collisions
+	// Default: true (enabled)
+	DNSHashing bool `yaml:"dns_hashing,omitempty" json:"dns_hashing,omitempty"`
 }
 
 // PortsConfig defines port allocation settings
@@ -299,6 +303,7 @@ func Defaults() *Config {
 		Network: NetworkConfig{
 			AllowedHosts: ".orb.local,localhost,127.0.0.1",
 			NetworkMode:  "bridge",
+			DNSHashing:   true, // Enable hashing by default
 		},
 		Ports: PortsConfig{
 			RangeStart:      10000,

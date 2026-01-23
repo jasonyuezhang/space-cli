@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -321,8 +323,66 @@ func getDockerComposePS(ctx context.Context, workDir string, cfg *config.Config,
 	return services, nil
 }
 
-// generateDNSUrls generates .space.local URLs for a service
+// generateDNSUrls generates .space.local URLs for a service with hash-based collision prevention
 func generateDNSUrls(serviceName string, cfg *config.Config, publishers []struct {
+	URL           string `json:"URL"`
+	TargetPort    int    `json:"TargetPort"`
+	PublishedPort int    `json:"PublishedPort"`
+	Protocol      string `json:"Protocol"`
+}) []string {
+	urls := make([]string, 0)
+
+	// Check if DNS hashing is enabled (default: true)
+	useHashing := true
+	if cfg != nil && !cfg.Network.DNSHashing {
+		useHashing = false
+	}
+
+	// If hashing is disabled, use legacy format
+	if !useHashing {
+		return generateDNSUrlsLegacy(serviceName, cfg, publishers)
+	}
+
+	// Get working directory for hash generation
+	workDir := Workdir
+	if workDir == "." {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			// Fallback to non-hashed domain if we can't get working directory
+			return generateDNSUrlsLegacy(serviceName, cfg, publishers)
+		}
+	}
+
+	// Make absolute for consistent hashing
+	absPath, err := filepath.Abs(workDir)
+	if err != nil {
+		// Fallback to non-hashed domain
+		return generateDNSUrlsLegacy(serviceName, cfg, publishers)
+	}
+
+	// Generate DNS domain with hash
+	baseDomain := generateDNSDomain(serviceName, absPath)
+
+	// First, try to get ports from Publishers (most accurate)
+	for _, pub := range publishers {
+		if pub.TargetPort > 0 && pub.Protocol == "tcp" {
+			urls = append(urls, fmt.Sprintf("http://%s:%d", baseDomain, pub.TargetPort))
+		}
+	}
+
+	// Fallback to configured ports if no publishers
+	if len(urls) == 0 {
+		if svc, ok := cfg.Services[serviceName]; ok && svc.Port > 0 {
+			urls = append(urls, fmt.Sprintf("http://%s:%d", baseDomain, svc.Port))
+		}
+	}
+
+	return urls
+}
+
+// generateDNSUrlsLegacy generates .space.local URLs without hash (backward compatibility)
+func generateDNSUrlsLegacy(serviceName string, cfg *config.Config, publishers []struct {
 	URL           string `json:"URL"`
 	TargetPort    int    `json:"TargetPort"`
 	PublishedPort int    `json:"PublishedPort"`
@@ -510,4 +570,27 @@ func ParseContainers(output string) []Container {
 	}
 
 	return containers
+}
+
+// generateDNSDomain creates a DNS domain name with directory-based hash
+// Format: {serviceName}-{hash}.space.local
+func generateDNSDomain(serviceName, workDir string) string {
+	hash := generateDirectoryHash(workDir)
+	return fmt.Sprintf("%s-%s.space.local", serviceName, hash)
+}
+
+// generateDirectoryHash creates a 6-character hash from a directory path
+// This is a duplicate of dns.GenerateDirectoryHash to avoid circular imports
+func generateDirectoryHash(dirPath string) string {
+	// Clean and normalize the path
+	cleanPath := filepath.Clean(dirPath)
+
+	// Create SHA256 hash
+	hasher := sha256.New()
+	hasher.Write([]byte(cleanPath))
+	hashBytes := hasher.Sum(nil)
+
+	// Convert to hex and take first 6 characters
+	hexHash := hex.EncodeToString(hashBytes)
+	return hexHash[:6]
 }

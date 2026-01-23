@@ -291,6 +291,25 @@ func getGitBranch(workDir string) string {
 
 // startDNSServer starts the embedded DNS server as a persistent daemon
 func startDNSServer(ctx context.Context, projectName string) error {
+	// Get working directory for hash generation
+	workDir := Workdir
+	if workDir == "." {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			fmt.Printf("⚠️  Could not get working directory: %v\n", err)
+			workDir = ""
+		}
+	}
+
+	// Make absolute for consistent hashing
+	if workDir != "" {
+		absPath, err := filepath.Abs(workDir)
+		if err == nil {
+			workDir = absPath
+		}
+	}
+
 	// Check if DNS server is already running
 	if isDNSServerRunning() {
 		dnsState, err := loadDNSState()
@@ -315,13 +334,15 @@ func startDNSServer(ctx context.Context, projectName string) error {
 	for _, port := range ports {
 		dnsAddr = fmt.Sprintf("127.0.0.1:%d", port)
 
-		// Create DNS server
+		// Create DNS server with hashing enabled
 		var err error
 		server, err = dns.NewServer(dns.Config{
 			Addr:        dnsAddr,
 			Upstream:    "8.8.8.8:53",
 			ProjectName: projectName,
 			Domain:      "space.local",
+			WorkDir:     workDir,     // Enable directory-based hashing
+			UseHashing:  true,        // Enable hashing by default
 			CacheTTL:    30 * time.Second,
 			Docker:      dockerClient,
 			Logger:      logger,

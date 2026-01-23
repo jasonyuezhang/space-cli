@@ -1,0 +1,55 @@
+# Example space-cli configuration file
+# Place this file as .space.yml in your project root
+
+project:
+  # Project name (optional - defaults to directory name)
+  name: my-project
+
+  # Naming strategy: "git-branch" (default), "directory", or "static"
+  naming_strategy: git-branch
+
+  # Docker compose files to use
+  compose_files:
+    - docker-compose.yml
+
+# Service-specific configuration
+services:
+  web:
+    port: 3000
+    external_port: 3000
+  api:
+    port: 8080
+    external_port: 8080
+  postgres:
+    port: 5432
+
+# Network configuration
+network:
+  # Enable DNS hashing to prevent collisions when multiple projects
+  # have services with the same names running from different directories
+  # Default: true
+  dns_hashing: true
+
+  # When dns_hashing is enabled, services will be accessible at:
+  # {service}-{6-char-hash}.space.local
+  #
+  # Example with hashing enabled:
+  # - web-a1b2c3.space.local:3000
+  # - api-a1b2c3.space.local:8080
+  #
+  # Example with hashing disabled:
+  # - web.space.local:3000
+  # - api.space.local:8080
+
+  allowed_hosts: ".space.local,localhost,127.0.0.1"
+  network_mode: bridge
+
+# Provider configuration
+provider:
+  type: auto  # auto-detect provider: "orbstack", "docker-desktop", or "generic"
+
+# Port allocation
+ports:
+  range_start: 10000
+  range_end: 60000
+  strategy: sequential

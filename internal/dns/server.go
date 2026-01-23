@@ -17,6 +17,8 @@ type Server struct {
 	upstream     string
 	projectName  string
 	domain       string
+	workDir      string // Working directory for hash generation
+	useHashing   bool   // Enable directory-based hashing for DNS names
 	server       *dns.Server
 	docker       DockerClient
 	cache        *cache
@@ -45,6 +47,8 @@ type Config struct {
 	Upstream    string        // Upstream DNS server (e.g., "8.8.8.8:53")
 	ProjectName string        // Docker compose project name
 	Domain      string        // Domain to handle (e.g., "orb.local")
+	WorkDir     string        // Working directory for hash generation
+	UseHashing  bool          // Enable directory-based hashing (default: true)
 	CacheTTL    time.Duration // Cache TTL (default: 30s)
 	Docker      DockerClient  // Docker client
 	Logger      Logger        // Logger
@@ -64,12 +68,23 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.CacheTTL == 0 {
 		cfg.CacheTTL = 30 * time.Second
 	}
+	// Default to enabling hashing unless explicitly disabled
+	useHashing := cfg.UseHashing
+	if cfg.WorkDir != "" && !cfg.UseHashing {
+		// Only disable if explicitly set to false with a workdir
+		useHashing = false
+	} else if cfg.WorkDir != "" {
+		// Enable hashing by default when workdir is provided
+		useHashing = true
+	}
 
 	s := &Server{
 		addr:        cfg.Addr,
 		upstream:    cfg.Upstream,
 		projectName: cfg.ProjectName,
 		domain:      cfg.Domain,
+		workDir:     cfg.WorkDir,
+		useHashing:  useHashing,
 		docker:      cfg.Docker,
 		cache:       newCache(cfg.CacheTTL, 1000),
 		logger:      cfg.Logger,
@@ -227,8 +242,30 @@ func (s *Server) resolveContainerIP(ctx context.Context, hostname string) (strin
 	hostname = strings.TrimSuffix(hostname, "."+s.domain)
 	hostname = strings.TrimSuffix(hostname, ".")
 
+	var serviceName string
+
+	// If hashing is enabled, extract service name from hashed domain
+	if s.useHashing && s.workDir != "" {
+		// Check if this is a valid hashed domain
+		fullHostname := hostname + "." + s.domain
+		if ValidateHashedDomain(fullHostname, s.domain) {
+			// Extract service name from hashed domain
+			serviceName = ExtractServiceNameFromHashedDomain(fullHostname, s.domain)
+			s.logger.Debug("Extracted service from hashed domain",
+				"hostname", hostname,
+				"service", serviceName)
+		} else {
+			// Not a valid hashed domain, use hostname as-is
+			serviceName = hostname
+			s.logger.Debug("Non-hashed domain lookup", "hostname", hostname)
+		}
+	} else {
+		// Hashing disabled, use hostname directly
+		serviceName = hostname
+	}
+
 	// Try to find matching container
-	ip, err := s.docker.GetContainerIP(ctx, s.projectName, hostname)
+	ip, err := s.docker.GetContainerIP(ctx, s.projectName, serviceName)
 	if err != nil {
 		return "", err
 	}
