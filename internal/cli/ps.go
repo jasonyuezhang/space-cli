@@ -291,7 +291,11 @@ func getDockerComposePS(ctx context.Context, workDir string, cfg *config.Config,
 		ports := make([]string, 0, len(rawService.Publishers))
 		for _, pub := range rawService.Publishers {
 			if pub.PublishedPort > 0 {
+				// Port mapping mode (e.g., "6060:6060/tcp")
 				ports = append(ports, fmt.Sprintf("%d:%d/%s", pub.PublishedPort, pub.TargetPort, pub.Protocol))
+			} else if pub.TargetPort > 0 {
+				// DNS mode - only internal port exposed (e.g., "6060/tcp")
+				ports = append(ports, fmt.Sprintf("%d/%s", pub.TargetPort, pub.Protocol))
 			}
 		}
 
@@ -305,7 +309,7 @@ func getDockerComposePS(ctx context.Context, workDir string, cfg *config.Config,
 
 		// Add DNS URLs if DNS mode is active
 		if isDNSServerRunning() {
-			status.DNSUrls = generateDNSUrls(serviceName, cfg)
+			status.DNSUrls = generateDNSUrls(serviceName, cfg, rawService.Publishers)
 		}
 
 		// Add local URLs
@@ -318,12 +322,26 @@ func getDockerComposePS(ctx context.Context, workDir string, cfg *config.Config,
 }
 
 // generateDNSUrls generates .space.local URLs for a service
-func generateDNSUrls(serviceName string, cfg *config.Config) []string {
+func generateDNSUrls(serviceName string, cfg *config.Config, publishers []struct {
+	URL           string `json:"URL"`
+	TargetPort    int    `json:"TargetPort"`
+	PublishedPort int    `json:"PublishedPort"`
+	Protocol      string `json:"Protocol"`
+}) []string {
 	urls := make([]string, 0)
 
-	// Check if service has port configured
-	if svc, ok := cfg.Services[serviceName]; ok && svc.Port > 0 {
-		urls = append(urls, fmt.Sprintf("http://%s.space.local:%d", serviceName, svc.Port))
+	// First, try to get ports from Publishers (most accurate)
+	for _, pub := range publishers {
+		if pub.TargetPort > 0 && pub.Protocol == "tcp" {
+			urls = append(urls, fmt.Sprintf("http://%s.space.local:%d", serviceName, pub.TargetPort))
+		}
+	}
+
+	// Fallback to configured ports if no publishers
+	if len(urls) == 0 {
+		if svc, ok := cfg.Services[serviceName]; ok && svc.Port > 0 {
+			urls = append(urls, fmt.Sprintf("http://%s.space.local:%d", serviceName, svc.Port))
+		}
 	}
 
 	return urls
