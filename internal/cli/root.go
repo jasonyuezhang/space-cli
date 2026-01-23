@@ -45,6 +45,7 @@ func init() {
 	rootCmd.AddCommand(newInitCommand())
 	rootCmd.AddCommand(newUpCommand())
 	rootCmd.AddCommand(newDownCommand())
+	rootCmd.AddCommand(newPsCommand())
 	rootCmd.AddCommand(newStatusCommand())
 	rootCmd.AddCommand(newRestartCommand())
 	rootCmd.AddCommand(newLogsCommand())
