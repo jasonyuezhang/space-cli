@@ -19,15 +19,15 @@ var rootCmd = &cobra.Command{
 	Use:   "space",
 	Short: "Space CLI - Generic development environment orchestration",
 	Long: `Space CLI is a generic tool for managing Docker Compose and VM-based
-development environments with support for multiple providers (OrbStack, Docker Desktop)
-and smart configuration management.
+development environments with support for Docker providers (OrbStack, Docker Desktop)
+and VM providers (OrbStack, Lima).
 
 Features:
   • Zero-config mode with auto-detection
   • Provider-aware networking (OrbStack DNS, Docker port mapping)
   • Smart port allocation with persistence
   • Database operations (create, migrate, seed)
-  • VM management (Lima, OrbStack VM)
+  • VM management (OrbStack VM, Lima)
   • Framework presets (Rails, Node.js, Go)`,
 	Version: Version,
 }
