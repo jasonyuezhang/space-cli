@@ -100,7 +100,8 @@ To run in the background, use: space dns start &`,
 			}
 
 			ctx := context.Background()
-			projectName := "space"
+			// Empty project name means search all projects
+			projectName := ""
 
 			fmt.Println("🌐 Starting space-dns-daemon...")
 
