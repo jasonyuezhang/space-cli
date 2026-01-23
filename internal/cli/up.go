@@ -253,6 +253,7 @@ func generateProjectName(cfg *config.Config, workDir string) string {
 		prefix = baseName + "-"
 	}
 
+	var projectName string
 	switch cfg.Project.NamingStrategy {
 	case "git-branch":
 		// Try to get git branch
@@ -261,21 +262,62 @@ func generateProjectName(cfg *config.Config, workDir string) string {
 			// Clean branch name (remove special chars)
 			branch = strings.ReplaceAll(branch, "/", "-")
 			branch = strings.ReplaceAll(branch, "_", "-")
-			return prefix + branch
+			projectName = prefix + branch
+		} else {
+			// Fallback to directory
+			projectName = prefix + filepath.Base(workDir)
 		}
-		fallthrough
 
 	case "directory":
 		// Use directory name
-		return prefix + filepath.Base(workDir)
+		projectName = prefix + filepath.Base(workDir)
 
 	case "static":
 		fallthrough
 
 	default:
 		// Use configured name
-		return baseName
+		projectName = baseName
 	}
+
+	// Normalize project name to meet Docker requirements:
+	// - Must start with letter or number
+	// - Only lowercase alphanumeric, hyphens, and underscores
+	return normalizeProjectName(projectName)
+}
+
+// normalizeProjectName ensures project name meets Docker Compose requirements:
+// - Must start with a letter or number
+// - Only lowercase alphanumeric characters, hyphens, and underscores
+func normalizeProjectName(name string) string {
+	// Convert to lowercase
+	name = strings.ToLower(name)
+
+	// Remove leading underscores and hyphens
+	name = strings.TrimLeft(name, "_-")
+
+	// If name is now empty or doesn't start with alphanumeric, prefix with 'p'
+	if len(name) == 0 || !isAlphanumeric(name[0]) {
+		name = "p" + name
+	}
+
+	// Replace any remaining invalid characters with hyphens
+	var result strings.Builder
+	for i, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			result.WriteRune(c)
+		} else if i > 0 {
+			// Replace invalid chars with hyphen (but not at start)
+			result.WriteRune('-')
+		}
+	}
+
+	return result.String()
+}
+
+// isAlphanumeric checks if a byte is a lowercase letter or digit
+func isAlphanumeric(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
 // getGitBranch returns the current git branch name
