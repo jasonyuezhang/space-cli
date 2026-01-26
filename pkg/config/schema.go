@@ -226,8 +226,38 @@ type HooksConfig struct {
 	// Vite-specific hooks for frontend development
 	Vite *ViteHooksConfig `yaml:"vite,omitempty" json:"vite,omitempty"`
 
+	// Database-specific hooks for database setup
+	Database *DatabaseHooksConfig `yaml:"database,omitempty" json:"database,omitempty"`
+
 	// Custom hooks for arbitrary commands
 	Custom []CustomHookConfig `yaml:"custom,omitempty" json:"custom,omitempty"`
+}
+
+// DatabaseHooksConfig defines database-specific hook settings
+type DatabaseHooksConfig struct {
+	// River queue database configuration
+	River *RiverHooksConfig `yaml:"river,omitempty" json:"river,omitempty"`
+}
+
+// RiverHooksConfig defines River queue database hook settings
+type RiverHooksConfig struct {
+	// Enabled enables River database setup
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// PostgresService is the name of the postgres service (default: "postgres")
+	PostgresService string `yaml:"postgres_service,omitempty" json:"postgres_service,omitempty"`
+
+	// DatabaseName is the River database name (default: "river")
+	DatabaseName string `yaml:"database_name,omitempty" json:"database_name,omitempty"`
+
+	// Username for postgres connection (default: "admin")
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+
+	// Password for postgres connection (default: "test")
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+
+	// Port for postgres (default: 5432)
+	Port int `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
 // ViteHooksConfig defines Vite-specific hook settings
@@ -514,6 +544,36 @@ func (c *Config) Merge(other *Config) *Config {
 	}
 	if len(other.Hooks.Custom) > 0 {
 		merged.Hooks.Custom = other.Hooks.Custom
+	}
+
+	// Merge database hooks config
+	if other.Hooks.Database != nil {
+		if merged.Hooks.Database == nil {
+			merged.Hooks.Database = &DatabaseHooksConfig{}
+		}
+		if other.Hooks.Database.River != nil {
+			if merged.Hooks.Database.River == nil {
+				merged.Hooks.Database.River = &RiverHooksConfig{}
+			}
+			if other.Hooks.Database.River.Enabled {
+				merged.Hooks.Database.River.Enabled = other.Hooks.Database.River.Enabled
+			}
+			if other.Hooks.Database.River.PostgresService != "" {
+				merged.Hooks.Database.River.PostgresService = other.Hooks.Database.River.PostgresService
+			}
+			if other.Hooks.Database.River.DatabaseName != "" {
+				merged.Hooks.Database.River.DatabaseName = other.Hooks.Database.River.DatabaseName
+			}
+			if other.Hooks.Database.River.Username != "" {
+				merged.Hooks.Database.River.Username = other.Hooks.Database.River.Username
+			}
+			if other.Hooks.Database.River.Password != "" {
+				merged.Hooks.Database.River.Password = other.Hooks.Database.River.Password
+			}
+			if other.Hooks.Database.River.Port > 0 {
+				merged.Hooks.Database.River.Port = other.Hooks.Database.River.Port
+			}
+		}
 	}
 
 	return &merged

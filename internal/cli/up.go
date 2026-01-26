@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/happy-sdk/space-cli/internal/dns"
+	"github.com/happy-sdk/space-cli/internal/hooks"
+	"github.com/happy-sdk/space-cli/internal/hooks/database"
 	"github.com/happy-sdk/space-cli/internal/hooks/vite"
 	"github.com/happy-sdk/space-cli/internal/provider"
 	"github.com/happy-sdk/space-cli/pkg/config"
@@ -207,9 +209,10 @@ func newUpCommand() *cobra.Command {
 			}
 			fmt.Println()
 
-			// Run post-up hooks (Vite integration)
+			// Run post-up hooks (Vite integration, Database setup)
 			if useDNS {
 				runPostUpHooks(workDir, projectName, cfg)
+				runDatabaseHooks(ctx, workDir, cfg)
 			}
 
 			// Show access information
@@ -757,5 +760,95 @@ func runPostUpHooks(workDir, projectName string, cfg *config.Config) {
 	// Report any errors
 	for _, hookErr := range result.Errors {
 		fmt.Printf("   ⚠️  %v\n", hookErr)
+	}
+}
+
+// runDatabaseHooks runs database setup hooks (River, etc.)
+func runDatabaseHooks(ctx context.Context, workDir string, cfg *config.Config) {
+	// Check if River hooks are enabled
+	riverEnabled := false
+	if cfg.Hooks.Database != nil && cfg.Hooks.Database.River != nil {
+		riverEnabled = cfg.Hooks.Database.River.Enabled
+	}
+
+	// Auto-detect: If postgres service exists and River CLI is available, enable by default
+	if !riverEnabled {
+		// Check for postgres service
+		hasPostgres := false
+		for name := range cfg.Services {
+			if name == "postgres" || strings.Contains(name, "postgres") {
+				hasPostgres = true
+				break
+			}
+		}
+
+		// Check if river CLI exists
+		if hasPostgres {
+			if _, err := exec.LookPath("river"); err == nil {
+				riverEnabled = true
+			}
+		}
+	}
+
+	if !riverEnabled {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("🗄️  Setting up River queue database...")
+
+	// Create River hook with configuration
+	riverHook := database.NewRiverHook()
+
+	// Apply configuration overrides
+	if cfg.Hooks.Database != nil && cfg.Hooks.Database.River != nil {
+		riverCfg := cfg.Hooks.Database.River
+		if riverCfg.PostgresService != "" {
+			riverHook.PostgresService = riverCfg.PostgresService
+		}
+		if riverCfg.DatabaseName != "" {
+			riverHook.DatabaseName = riverCfg.DatabaseName
+		}
+		if riverCfg.Username != "" {
+			riverHook.Username = riverCfg.Username
+		}
+		if riverCfg.Password != "" {
+			riverHook.Password = riverCfg.Password
+		}
+		if riverCfg.Port > 0 {
+			riverHook.Port = riverCfg.Port
+		}
+	}
+
+	// Build hook context
+	hookCtx := &hooks.HookContext{
+		WorkDir:    workDir,
+		DNSEnabled: true,
+		BaseDomain: "space.local",
+		Hash:       dns.GenerateDirectoryHash(workDir),
+		Services:   make(map[string]*hooks.ServiceInfo),
+		Metadata:   make(map[string]interface{}),
+	}
+
+	// Add services from config
+	for name, svc := range cfg.Services {
+		hookCtx.Services[name] = &hooks.ServiceInfo{
+			Name:         name,
+			InternalPort: svc.Port,
+		}
+	}
+
+	// Check if hook should execute
+	if !riverHook.ShouldExecute(ctx, hooks.PostUp, hookCtx) {
+		fmt.Println("   ⏭️  Skipping River setup (postgres service not found)")
+		return
+	}
+
+	// Execute the hook
+	if err := riverHook.Execute(ctx, hooks.PostUp, hookCtx); err != nil {
+		fmt.Printf("   ⚠️  River database setup failed: %v\n", err)
+		fmt.Println("   💡 Tip: Make sure postgres is fully started and river CLI is installed")
+		fmt.Println("   💡 Install river CLI: go install github.com/riverqueue/river/cmd/river@latest")
+		return
 	}
 }
