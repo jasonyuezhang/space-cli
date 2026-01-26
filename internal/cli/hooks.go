@@ -45,13 +45,18 @@ func newHooksInitCommand() *cobra.Command {
 				return fmt.Errorf("failed to resolve working directory: %w", err)
 			}
 
-			fmt.Printf("🪝 Initializing hooks in %s/.space/hooks/\n", workDir)
+			fmt.Printf("🪝 Initializing .space/ in %s\n", workDir)
 
 			if err := hooks.InitHooksDir(workDir); err != nil {
 				return fmt.Errorf("failed to initialize hooks: %w", err)
 			}
 
-			fmt.Println("✅ Hooks directory initialized!")
+			// Also create commands directory
+			if err := initCommandsDir(workDir); err != nil {
+				return fmt.Errorf("failed to initialize commands: %w", err)
+			}
+
+			fmt.Println("✅ Space directories initialized!")
 			fmt.Println()
 			fmt.Println("Created directories:")
 			fmt.Println("   .space/hooks/pre-up.d/      - Before docker compose up")
@@ -59,8 +64,10 @@ func newHooksInitCommand() *cobra.Command {
 			fmt.Println("   .space/hooks/pre-down.d/    - Before docker compose down")
 			fmt.Println("   .space/hooks/post-down.d/   - After services are stopped")
 			fmt.Println("   .space/hooks/on-dns-ready.d/ - When DNS is configured")
+			fmt.Println("   .space/commands/            - Custom commands (any language)")
 			fmt.Println()
-			fmt.Println("📖 See .space/hooks/README.md for documentation and examples")
+			fmt.Println("📖 See .space/hooks/README.md for hook documentation")
+			fmt.Println("📖 See .space/commands/README.md for custom commands")
 
 			if withTemplates {
 				if err := createTemplateHooks(workDir); err != nil {
@@ -313,3 +320,182 @@ echo "   ✅ River database ready at ${PG_HOST}:${DB_PORT}/${DB_NAME}"
 
 	return nil
 }
+
+// initCommandsDir creates the commands directory structure
+func initCommandsDir(workDir string) error {
+	commandsDir := filepath.Join(workDir, ".space", "commands")
+
+	if err := os.MkdirAll(commandsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create commands dir: %w", err)
+	}
+
+	// Create .gitkeep
+	gitkeep := filepath.Join(commandsDir, ".gitkeep")
+	if _, err := os.Stat(gitkeep); os.IsNotExist(err) {
+		if err := os.WriteFile(gitkeep, []byte(""), 0644); err != nil {
+			return err
+		}
+	}
+
+	// Create README
+	readme := filepath.Join(commandsDir, "README.md")
+	if _, err := os.Stat(readme); os.IsNotExist(err) {
+		if err := os.WriteFile(readme, []byte(commandsReadme), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+const commandsReadme = `# Custom Commands
+
+Create custom commands in this directory. They can be written in any language.
+
+## Supported Languages
+
+| Extension | Interpreter |
+|-----------|-------------|
+| .sh (or none) | sh |
+| .py | python3 |
+| .js | node |
+| .ts | bun/tsx/ts-node |
+| .go | go run |
+| .rb | ruby |
+
+## Usage
+
+` + "```bash" + `
+# Run a command
+space run <command-name> [args...]
+
+# List available commands
+space run list
+` + "```" + `
+
+## Context
+
+Commands receive context in two ways:
+
+### Environment Variables
+
+` + "```bash" + `
+SPACE_WORKDIR=/path/to/project
+SPACE_PROJECT_NAME=myproject
+SPACE_HASH=abc123
+SPACE_BASE_DOMAIN=space.local
+SPACE_SERVICE_POSTGRES_DNS_NAME=postgres-abc123.space.local
+SPACE_SERVICE_POSTGRES_PORT=5432
+SPACE_SERVICE_POSTGRES_URL=http://postgres-abc123.space.local:5432
+` + "```" + `
+
+### JSON on stdin
+
+` + "```json" + `
+{
+  "work_dir": "/path/to/project",
+  "project_name": "myproject",
+  "hash": "abc123",
+  "base_domain": "space.local",
+  "command": "my-command",
+  "args": ["arg1", "arg2"],
+  "services": {
+    "postgres": {
+      "name": "postgres",
+      "dns_name": "postgres-abc123.space.local",
+      "internal_port": 5432,
+      "url": "http://postgres-abc123.space.local:5432"
+    }
+  }
+}
+` + "```" + `
+
+## Examples
+
+### Shell Command (db-shell.sh)
+
+` + "```bash" + `
+#!/bin/bash
+# Connect to postgres via psql
+psql "postgres://admin:test@${SPACE_SERVICE_POSTGRES_DNS_NAME}:5432/propeldb"
+` + "```" + `
+
+### Python Command (analyze.py)
+
+` + "```python" + `
+#!/usr/bin/env python3
+import json
+import sys
+import os
+
+# Read context from stdin
+context = json.load(sys.stdin)
+
+print(f"Project: {context['project_name']}")
+print(f"Hash: {context['hash']}")
+
+for name, svc in context['services'].items():
+    print(f"Service {name}: {svc['url']}")
+` + "```" + `
+
+### TypeScript Command (deploy.ts)
+
+` + "```typescript" + `
+import { stdin } from 'process';
+
+interface Context {
+  work_dir: string;
+  project_name: string;
+  hash: string;
+  args: string[];
+  services: Record<string, { dns_name: string; internal_port: number }>;
+}
+
+async function main() {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stdin) {
+    chunks.push(chunk);
+  }
+  const context: Context = JSON.parse(Buffer.concat(chunks).toString());
+
+  console.log('Deploying', context.project_name);
+  console.log('Args:', context.args);
+}
+
+main();
+` + "```" + `
+
+### Go Command (health.go)
+
+` + "```go" + `
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "os"
+)
+
+type Context struct {
+    Services map[string]struct {
+        URL string ` + "`json:\"url\"`" + `
+    } ` + "`json:\"services\"`" + `
+}
+
+func main() {
+    var ctx Context
+    json.NewDecoder(os.Stdin).Decode(&ctx)
+
+    for name, svc := range ctx.Services {
+        resp, err := http.Get(svc.URL + "/health")
+        if err != nil {
+            fmt.Printf("%s: DOWN (%v)\n", name, err)
+        } else {
+            fmt.Printf("%s: %s\n", name, resp.Status)
+            resp.Body.Close()
+        }
+    }
+}
+` + "```" + `
+`
