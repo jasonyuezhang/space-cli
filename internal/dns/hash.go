@@ -82,6 +82,37 @@ func ExtractServiceNameFromHashedDomain(domain, baseDomain string) string {
 	return domain
 }
 
+// ExtractHashFromHashedDomain extracts the hash from a hashed domain.
+// This is useful for matching containers by their directory hash.
+//
+// Example:
+//
+//	ExtractHashFromHashedDomain("web-a1b2c3.space.local", "space.local")
+//	-> "a1b2c3"
+func ExtractHashFromHashedDomain(domain, baseDomain string) string {
+	// Remove trailing dot first if present
+	domain = strings.TrimSuffix(domain, ".")
+
+	// Remove the base domain suffix
+	domain = strings.TrimSuffix(domain, "."+baseDomain)
+
+	// Find the last dash (before the hash)
+	lastDash := strings.LastIndex(domain, "-")
+	if lastDash == -1 {
+		// No hash present
+		return ""
+	}
+
+	// Check if what follows the dash looks like a 6-char hex hash
+	potentialHash := domain[lastDash+1:]
+	if len(potentialHash) == 6 && isHexString(potentialHash) {
+		return potentialHash
+	}
+
+	// No hash pattern detected
+	return ""
+}
+
 // isHexString checks if a string contains only hexadecimal characters
 func isHexString(s string) bool {
 	for _, c := range s {

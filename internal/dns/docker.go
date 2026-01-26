@@ -2,8 +2,11 @@ package dns
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,7 +26,7 @@ func NewSimpleDockerClient(logger Logger) *SimpleDockerClient {
 func (c *SimpleDockerClient) GetContainerIP(ctx context.Context, projectName, containerName string) (string, error) {
 	// If projectName is empty, search all containers
 	if projectName == "" {
-		return c.findContainerIPAcrossProjects(ctx, containerName)
+		return c.findContainerIPAcrossProjects(ctx, containerName, "")
 	}
 
 	// Try exact match first
@@ -48,6 +51,11 @@ func (c *SimpleDockerClient) GetContainerIP(ctx context.Context, projectName, co
 	}
 
 	return "", fmt.Errorf("container not found: %s", containerName)
+}
+
+// GetContainerIPByHash gets the IP address of a container matching both service name and directory hash
+func (c *SimpleDockerClient) GetContainerIPByHash(ctx context.Context, serviceName, hash string) (string, error) {
+	return c.findContainerIPAcrossProjects(ctx, serviceName, hash)
 }
 
 // getIP gets the IP address of a container by exact name
@@ -109,9 +117,9 @@ func (c *SimpleDockerClient) ListProjectContainers(ctx context.Context, projectN
 	return containers, nil
 }
 
-// findContainerIPAcrossProjects searches all containers for a matching service name
-func (c *SimpleDockerClient) findContainerIPAcrossProjects(ctx context.Context, serviceName string) (string, error) {
-	// List all running containers
+// findContainerIPAcrossProjects searches all containers for a matching service name and optional hash
+func (c *SimpleDockerClient) findContainerIPAcrossProjects(ctx context.Context, serviceName, hash string) (string, error) {
+	// List all running containers with their labels
 	cmd := exec.CommandContext(ctx, "docker", "ps", "--format", "{{.Names}}")
 	output, err := cmd.Output()
 	if err != nil {
@@ -120,24 +128,95 @@ func (c *SimpleDockerClient) findContainerIPAcrossProjects(ctx context.Context, 
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
-	// Try to find container matching the service name
-	// Container name format: projectname-servicename-1 or projectname-servicename_1
+	// If no hash specified, fall back to matching by service name only (legacy behavior)
+	if hash == "" {
+		for _, containerName := range lines {
+			if containerName == "" {
+				continue
+			}
+			if c.matchesServiceName(containerName, serviceName) {
+				ip, err := c.getIP(ctx, "", containerName)
+				if err == nil && ip != "" {
+					return ip, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("container not found for service: %s", serviceName)
+	}
+
+	// Match by both service name AND directory hash
 	for _, containerName := range lines {
 		if containerName == "" {
 			continue
 		}
 
-		// Check if container name contains the service name
-		// Match patterns like: *-servicename-1, *-servicename_1, *-servicename
-		if c.matchesServiceName(containerName, serviceName) {
+		// Check service name first
+		if !c.matchesServiceName(containerName, serviceName) {
+			continue
+		}
+
+		// Get container's working directory and compute its hash
+		workDir, err := c.getContainerWorkDir(ctx, containerName)
+		if err != nil {
+			c.logger.Debug("Failed to get working dir for container", "container", containerName, "error", err)
+			continue
+		}
+
+		// Compute hash from working directory
+		containerHash := computeHash(workDir)
+		c.logger.Debug("Checking container hash", "container", containerName, "workDir", workDir, "hash", containerHash, "expected", hash)
+
+		if containerHash == hash {
 			ip, err := c.getIP(ctx, "", containerName)
 			if err == nil && ip != "" {
+				c.logger.Info("Found container by hash", "service", serviceName, "hash", hash, "container", containerName, "ip", ip)
 				return ip, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("container not found for service: %s", serviceName)
+	return "", fmt.Errorf("container not found for service %s with hash %s", serviceName, hash)
+}
+
+// getContainerWorkDir gets the working directory of a container from Docker labels
+func (c *SimpleDockerClient) getContainerWorkDir(ctx context.Context, containerName string) (string, error) {
+	// Get the com.docker.compose.project.working_dir label
+	cmd := exec.CommandContext(ctx, "docker", "inspect",
+		"--format", "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}",
+		containerName)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	workDir := strings.TrimSpace(string(output))
+	if workDir == "" {
+		return "", fmt.Errorf("no working directory label found")
+	}
+
+	return workDir, nil
+}
+
+// computeHash computes a 6-character hash from a directory path
+func computeHash(dirPath string) string {
+	// Clean and normalize the path
+	cleanPath := filepath.Clean(dirPath)
+
+	// Convert to absolute path for consistency
+	absPath, err := filepath.Abs(cleanPath)
+	if err != nil {
+		absPath = cleanPath
+	}
+
+	// Create SHA256 hash
+	hasher := sha256.New()
+	hasher.Write([]byte(absPath))
+	hashBytes := hasher.Sum(nil)
+
+	// Convert to hex and take first 6 characters
+	hexHash := hex.EncodeToString(hashBytes)
+	return hexHash[:6]
 }
 
 // matchesServiceName checks if a container name matches the service name pattern
