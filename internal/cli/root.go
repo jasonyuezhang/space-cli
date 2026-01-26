@@ -57,6 +57,7 @@ func init() {
 	rootCmd.AddCommand(newVMCommand())
 	rootCmd.AddCommand(newMigrateCommand())
 	rootCmd.AddCommand(newDNSCommand())
+	rootCmd.AddCommand(newHooksCommand())
 }
 
 // Placeholder commands - to be implemented

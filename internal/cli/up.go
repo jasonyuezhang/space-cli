@@ -12,8 +12,6 @@ import (
 
 	"github.com/happy-sdk/space-cli/internal/dns"
 	"github.com/happy-sdk/space-cli/internal/hooks"
-	"github.com/happy-sdk/space-cli/internal/hooks/database"
-	"github.com/happy-sdk/space-cli/internal/hooks/vite"
 	"github.com/happy-sdk/space-cli/internal/provider"
 	"github.com/happy-sdk/space-cli/pkg/config"
 	"github.com/spf13/cobra"
@@ -209,10 +207,9 @@ func newUpCommand() *cobra.Command {
 			}
 			fmt.Println()
 
-			// Run post-up hooks (Vite integration, Database setup)
+			// Run post-up hooks (external scripts)
 			if useDNS {
-				runPostUpHooks(workDir, projectName, cfg)
-				runDatabaseHooks(ctx, workDir, cfg)
+				runScriptHooks(ctx, hooks.PostUp, workDir, projectName, cfg)
 			}
 
 			// Show access information
@@ -661,194 +658,44 @@ func cleanupDNSServer(ctx context.Context) {
 	}
 }
 
-// runPostUpHooks runs post-up hooks including Vite integration
-func runPostUpHooks(workDir, projectName string, cfg *config.Config) {
-	// Check if Vite hooks are enabled (auto-detect by default)
-	autoDetect := true
-	if cfg.Hooks.Vite != nil {
-		if !cfg.Hooks.Vite.Enabled && !cfg.Hooks.Vite.AutoDetect {
-			return // Vite hooks explicitly disabled
-		}
-		autoDetect = cfg.Hooks.Vite.AutoDetect
-	}
+// runScriptHooks runs external hook scripts for a given event
+func runScriptHooks(ctx context.Context, event hooks.EventType, workDir, projectName string, cfg *config.Config) {
+	// Create script executor
+	executor := hooks.NewScriptExecutor(workDir)
 
-	// Create Vite hook
-	viteHook, err := vite.NewHook(workDir)
-	if err != nil {
-		fmt.Printf("⚠️  Failed to initialize Vite hook: %v\n", err)
-		return
-	}
-
-	// Detect if this is a Vite project
-	detection, err := viteHook.Detector().Detect()
-	if err != nil {
-		fmt.Printf("⚠️  Vite detection failed: %v\n", err)
-		return
-	}
-
-	if !detection.IsViteProject {
-		return // Not a Vite project
+	// Check if hooks directory exists
+	hooksDir := filepath.Join(workDir, ".space", "hooks", string(event)+".d")
+	if _, err := os.Stat(hooksDir); os.IsNotExist(err) {
+		return // No hooks directory for this event
 	}
 
 	fmt.Println()
-	fmt.Println("🎨 Vite project detected, configuring for DNS mode...")
-
-	// Build service configs from space config or use configured env vars
-	var services []vite.ServiceEnvConfig
-
-	if cfg.Hooks.Vite != nil && len(cfg.Hooks.Vite.EnvVars) > 0 {
-		// Use explicitly configured env vars
-		for envVar, serviceRef := range cfg.Hooks.Vite.EnvVars {
-			// Parse service:port format
-			parts := strings.Split(serviceRef, ":")
-			serviceName := parts[0]
-			port := 0
-			if len(parts) > 1 {
-				fmt.Sscanf(parts[1], "%d", &port)
-			} else if svc, ok := cfg.Services[serviceName]; ok {
-				port = svc.Port
-			}
-
-			if port > 0 {
-				services = append(services, vite.ServiceEnvConfig{
-					ServiceName: serviceName,
-					Port:        port,
-					EnvVarName:  envVar,
-				})
-			}
-		}
-	} else if autoDetect {
-		// Auto-detect services from config
-		for serviceName, svcConfig := range cfg.Services {
-			if svcConfig.Port > 0 {
-				services = append(services, vite.ServiceEnvConfig{
-					ServiceName: serviceName,
-					Port:        svcConfig.Port,
-				})
-			}
-		}
-	}
-
-	if len(services) == 0 {
-		fmt.Println("   No services configured for Vite integration")
-		return
-	}
-
-	// Execute Vite hook
-	result, err := viteHook.ExecuteWithServices(services)
-	if err != nil {
-		fmt.Printf("⚠️  Vite hook failed: %v\n", err)
-		return
-	}
-
-	// Report results
-	if result.EnvResult != nil && result.EnvResult.Generated {
-		fmt.Printf("   ✅ Generated %s\n", result.EnvResult.FilePath)
-		for varName, value := range result.EnvResult.Variables {
-			fmt.Printf("      %s=%s\n", varName, value)
-		}
-	}
-
-	if result.ConfigResult != nil {
-		if result.ConfigResult.Updated {
-			fmt.Printf("   ✅ Updated %s with server.allowedHosts\n", result.ConfigResult.FilePath)
-		} else if result.ConfigResult.AlreadyPresent {
-			fmt.Printf("   ℹ️  %s already has space.local in allowedHosts\n", result.ConfigResult.FilePath)
-		}
-	}
-
-	// Report any errors
-	for _, hookErr := range result.Errors {
-		fmt.Printf("   ⚠️  %v\n", hookErr)
-	}
-}
-
-// runDatabaseHooks runs database setup hooks (River, etc.)
-func runDatabaseHooks(ctx context.Context, workDir string, cfg *config.Config) {
-	// Check if River hooks are enabled
-	riverEnabled := false
-	if cfg.Hooks.Database != nil && cfg.Hooks.Database.River != nil {
-		riverEnabled = cfg.Hooks.Database.River.Enabled
-	}
-
-	// Auto-detect: If postgres service exists and River CLI is available, enable by default
-	if !riverEnabled {
-		// Check for postgres service
-		hasPostgres := false
-		for name := range cfg.Services {
-			if name == "postgres" || strings.Contains(name, "postgres") {
-				hasPostgres = true
-				break
-			}
-		}
-
-		// Check if river CLI exists
-		if hasPostgres {
-			if _, err := exec.LookPath("river"); err == nil {
-				riverEnabled = true
-			}
-		}
-	}
-
-	if !riverEnabled {
-		return
-	}
-
-	fmt.Println()
-	fmt.Println("🗄️  Setting up River queue database...")
-
-	// Create River hook with configuration
-	riverHook := database.NewRiverHook()
-
-	// Apply configuration overrides
-	if cfg.Hooks.Database != nil && cfg.Hooks.Database.River != nil {
-		riverCfg := cfg.Hooks.Database.River
-		if riverCfg.PostgresService != "" {
-			riverHook.PostgresService = riverCfg.PostgresService
-		}
-		if riverCfg.DatabaseName != "" {
-			riverHook.DatabaseName = riverCfg.DatabaseName
-		}
-		if riverCfg.Username != "" {
-			riverHook.Username = riverCfg.Username
-		}
-		if riverCfg.Password != "" {
-			riverHook.Password = riverCfg.Password
-		}
-		if riverCfg.Port > 0 {
-			riverHook.Port = riverCfg.Port
-		}
-	}
+	fmt.Printf("🪝 Running %s hooks...\n", event)
 
 	// Build hook context
 	hookCtx := &hooks.HookContext{
-		WorkDir:    workDir,
-		DNSEnabled: true,
-		BaseDomain: "space.local",
-		Hash:       dns.GenerateDirectoryHash(workDir),
-		Services:   make(map[string]*hooks.ServiceInfo),
-		Metadata:   make(map[string]interface{}),
+		WorkDir:     workDir,
+		ProjectName: projectName,
+		DNSEnabled:  true,
+		BaseDomain:  "space.local",
+		Hash:        dns.GenerateDirectoryHash(workDir),
+		Services:    make(map[string]*hooks.ServiceInfo),
+		Metadata:    make(map[string]interface{}),
 	}
 
-	// Add services from config
+	// Add services from config with DNS names
 	for name, svc := range cfg.Services {
+		dnsName := fmt.Sprintf("%s-%s.%s", name, hookCtx.Hash, hookCtx.BaseDomain)
 		hookCtx.Services[name] = &hooks.ServiceInfo{
 			Name:         name,
+			DNSName:      dnsName,
 			InternalPort: svc.Port,
+			URL:          fmt.Sprintf("http://%s:%d", dnsName, svc.Port),
 		}
 	}
 
-	// Check if hook should execute
-	if !riverHook.ShouldExecute(ctx, hooks.PostUp, hookCtx) {
-		fmt.Println("   ⏭️  Skipping River setup (postgres service not found)")
-		return
-	}
-
-	// Execute the hook
-	if err := riverHook.Execute(ctx, hooks.PostUp, hookCtx); err != nil {
-		fmt.Printf("   ⚠️  River database setup failed: %v\n", err)
-		fmt.Println("   💡 Tip: Make sure postgres is fully started and river CLI is installed")
-		fmt.Println("   💡 Install river CLI: go install github.com/riverqueue/river/cmd/river@latest")
-		return
+	// Execute scripts
+	if err := executor.Execute(ctx, event, hookCtx); err != nil {
+		fmt.Printf("   ⚠️  Hook execution failed: %v\n", err)
 	}
 }
