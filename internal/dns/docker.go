@@ -59,7 +59,7 @@ func (c *SimpleDockerClient) GetContainerIPByHash(ctx context.Context, serviceNa
 }
 
 // getIP gets the IP address of a container by exact name
-func (c *SimpleDockerClient) getIP(ctx context.Context, projectName, containerName string) (string, error) {
+func (c *SimpleDockerClient) getIP(ctx context.Context, _, containerName string) (string, error) {
 	// Use docker inspect to get container IP
 	cmd := exec.CommandContext(ctx, "docker", "inspect",
 		"--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",

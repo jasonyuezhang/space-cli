@@ -133,7 +133,7 @@ func (h *Hook) Execute(ctx context.Context, event hooks.EventType, hookCtx *hook
 			if err := h.cfgUpd.ValidateConfig(detection.ConfigFile); err != nil {
 				// Restore backup on validation failure
 				if configResult.BackedUp {
-					h.cfgUpd.RestoreBackup(detection.ConfigFile)
+					_ = h.cfgUpd.RestoreBackup(detection.ConfigFile)
 				}
 				return fmt.Errorf("config validation failed: %w", err)
 			}

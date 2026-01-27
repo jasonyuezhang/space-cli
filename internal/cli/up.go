@@ -428,7 +428,7 @@ func startDNSServer(ctx context.Context, projectName string) error {
 	fmt.Println("📝 Setting up DNS resolver (may require sudo password)...")
 	if err := resolver.Setup(ctx); err != nil {
 		// Clean up server if resolver setup fails
-		server.Stop()
+		_ = server.Stop()
 		return fmt.Errorf("failed to setup resolver: %w", err)
 	}
 

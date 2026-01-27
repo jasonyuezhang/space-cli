@@ -72,17 +72,3 @@ func (c *cache) set(key, value string) {
 		expires: time.Now().Add(c.ttl),
 	}
 }
-
-// invalidate removes a key from the cache
-func (c *cache) invalidate(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.entries, key)
-}
-
-// clear removes all entries from the cache
-func (c *cache) clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries = make(map[string]*cacheEntry)
-}

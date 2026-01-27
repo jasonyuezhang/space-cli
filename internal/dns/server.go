@@ -216,7 +216,9 @@ func (s *Server) handleOrbLocal(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	w.WriteMsg(m)
+	if err := w.WriteMsg(m); err != nil {
+		s.logger.Debug("Failed to write DNS response", "error", err)
+	}
 }
 
 // handleUpstream forwards queries to upstream DNS
@@ -230,11 +232,15 @@ func (s *Server) handleUpstream(w dns.ResponseWriter, r *dns.Msg) {
 		s.logger.Warn("Failed to forward DNS query", "error", err)
 		m := new(dns.Msg)
 		m.SetRcode(r, dns.RcodeServerFailure)
-		w.WriteMsg(m)
+		if err := w.WriteMsg(m); err != nil {
+			s.logger.Debug("Failed to write DNS error response", "error", err)
+		}
 		return
 	}
 
-	w.WriteMsg(resp)
+	if err := w.WriteMsg(resp); err != nil {
+		s.logger.Debug("Failed to write DNS response", "error", err)
+	}
 }
 
 // resolveContainerIP resolves a container IP from its hostname

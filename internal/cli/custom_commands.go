@@ -183,8 +183,8 @@ func runCustomCommand(cmdPath, workDir string, args []string) error {
 	}
 
 	// Write context JSON to stdin and close
-	stdin.Write(contextJSON)
-	stdin.Close()
+	_, _ = stdin.Write(contextJSON)
+	_ = stdin.Close()
 
 	return cmd.Wait()
 }
