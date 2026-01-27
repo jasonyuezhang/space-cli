@@ -120,7 +120,6 @@ func newConfigValidateCommand() *cobra.Command {
 			fmt.Println("Working directory:", workDir)
 			fmt.Println("Project:", cfg.Project.Name)
 			fmt.Println("Services:", len(cfg.Services))
-			fmt.Println("Databases:", len(cfg.Databases))
 
 			return nil
 		},

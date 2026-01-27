@@ -1,212 +1,165 @@
-# Space CLI Prototypes
+# Space CLI
 
-This directory contains prototypes and planning documents for extracting generic Docker Compose and VM management functionality from propel-cli into a separate `space-cli` repository.
+A development environment orchestration tool for Docker Compose with intelligent provider detection (OrbStack, Docker Desktop).
+
+## Features
+
+- **Zero-config mode**: Works with just a `docker-compose.yml` present
+- **Provider-aware networking**: OrbStack DNS (`*.space.local`) or Docker Desktop port mapping
+- **Lifecycle hooks**: Automation via `.space/hooks/` scripts
+- **Custom commands**: Project-specific commands via `.space/commands/`
+- **DNS collision prevention**: Directory-based hashing for multi-project support
+
+## Installation
+
+```bash
+# Build from source
+make build
+
+# Or install directly
+go install github.com/happy-sdk/space-cli/cmd/space@latest
+```
+
+## Quick Start
+
+```bash
+# Start services (auto-detects provider)
+space up
+
+# List running containers with URLs
+space ps
+
+# Stop services
+space down
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `space up` | Start services with DNS (OrbStack) or port mapping (Docker Desktop) |
+| `space down` | Stop services and cleanup DNS |
+| `space ps` | List containers with service URLs |
+| `space config show` | Display merged configuration |
+| `space config validate` | Validate configuration |
+| `space dns status` | Check DNS daemon status |
+| `space hooks list` | List available hooks |
+| `space run <cmd>` | Run custom command from `.space/commands/` |
+
+## Configuration
+
+Create `.space.yaml` in your project root (optional - works without it):
+
+```yaml
+project:
+  name: myapp
+  naming_strategy: git-branch  # or "directory", "static"
+  compose_files:
+    - docker-compose.yml
+
+services:
+  api:
+    port: 6060
+    shell: /bin/bash
+```
+
+### Configuration Priority
+
+1. Project config (`.space.yaml`) - Highest priority
+2. Global config (`~/.config/space/config.yaml`)
+3. Defaults
+
+## Provider Detection
+
+Space CLI automatically detects your Docker provider:
+
+| Provider | DNS Mode | Port Mapping | Container DNS |
+|----------|----------|--------------|---------------|
+| OrbStack | Yes (`*.space.local`) | No | Yes |
+| Docker Desktop | No | Yes | No |
+| Generic Docker | No | Yes | No |
+
+## Hooks
+
+Create executable scripts in `.space/hooks/` to run at lifecycle events:
+
+```
+.space/
+└── hooks/
+    ├── pre-up.d/       # Before services start
+    ├── post-up.d/      # After services running
+    ├── pre-down.d/     # Before services stop
+    ├── post-down.d/    # After services stopped
+    └── on-dns-ready.d/ # When DNS configured
+```
+
+Hooks receive context as JSON on stdin with project info, services, and DNS details.
+
+## Custom Commands
+
+Create scripts in `.space/commands/` to add project-specific commands:
+
+```
+.space/
+└── commands/
+    ├── deploy.sh    # Shell
+    ├── migrate.py   # Python
+    └── test.ts      # TypeScript
+```
+
+Run with: `space run deploy` or `space deploy` (if no conflict)
+
+Supported languages: Shell, Python, Node.js, TypeScript, Go, Ruby, Perl
+
+## DNS Architecture (OrbStack)
+
+With OrbStack, services are accessible via DNS names:
+
+```
+service-<hash>.space.local
+```
+
+The 6-character hash is derived from the project directory path, preventing collisions when multiple projects have services with the same name.
 
 ## Development
 
-### Version Management
-
-Space CLI uses [Semantic Versioning 2.0.0](https://semver.org/). Versions are automatically bumped on each commit based on commit message keywords:
-
-- **`[major]`** or **`[breaking]`** - Bumps major version (x.0.0)
-- **`[minor]`** or **`[feature]`** or **`[feat]`** - Bumps minor version (0.x.0)
-- **`[patch]`** or **default** - Bumps patch version (0.0.x)
-
 ```bash
-# Show current version
-make version
+# Build
+make build
 
-# Manual version bumps
-make version-patch  # 0.1.0 → 0.1.1
-make version-minor  # 0.1.0 → 0.2.0
-make version-major  # 0.1.0 → 1.0.0
+# Run tests
+make test
 
-# Check version in binary
+# Run linter
+make lint
+
+# Show version
 space --version
 ```
 
-See [VERSIONING.md](VERSIONING.md) for complete documentation.
+### Version Management
 
-## Contents
+Versions are automatically bumped based on commit message keywords:
 
-### Planning Documents
-
-- **`../MIGRATION_PLAN.md`** - Complete 4-week migration plan with phases and tasks
-- **`EXTRACTION_CHECKLIST.md`** - Detailed checklist of files to extract and changes needed
-- **`ARCHITECTURE.md`** - Architecture diagrams and component breakdown
-- **`VERSIONING.md`** - Semantic versioning guide and workflow
-
-### Prototypes
-
-- **`space-cli/pkg/config/`** - Configuration system prototypes
-  - `schema.go` - Complete configuration schema with all settings (including VM support)
-  - `loader.go` - Multi-level config loading and merging
-
-### Example Configurations
-
-- **`examples/rails/`** - Example Rails application config
-- **`examples/nodejs/`** - Minimal Node.js application config
-- **`examples/with-vm/`** - VM-based development configuration
-
-## Configuration System
-
-The generic CLI uses a flexible configuration system with these priorities:
-
-1. **Project config** (`.space.yaml` in project root) - Highest priority
-2. **Global config** (`~/.config/space/config.yaml`)
-3. **Defaults** - Sensible defaults for common scenarios
-
-### Key Features
-
-- **Auto-discovery**: Reads `docker-compose.yml` to detect services and ports
-- **Provider-aware**: Adapts to OrbStack (DNS-based) vs Docker Desktop (port-based)
-- **VM support**: Integrated VM management with Lima and OrbStack VM providers
-- **Flexible database ops**: Configurable migrations, seeding, shell access
-- **Custom commands**: Define project-specific commands
-- **Port management**: Smart port allocation with persistence
-
-## Usage Examples
-
-### Minimal Config (Most things auto-discovered)
-
-```yaml
-# .space.yaml
-project:
-  name: myapp
-```
-
-### Rails App Config
-
-See `examples/rails/.space.yaml` for:
-- Standard Rails service setup
-- PostgreSQL database with Rails migrations
-- Custom Rails commands (console, routes, test)
-
-### VM-Based Development
-
-See `examples/with-vm/.space.yaml` for:
-- VM configuration (Lima or OrbStack VM)
-- Resource allocation (CPU, memory, disk)
-- Dependency installation
-- Startup commands
+- `[major]` or `[breaking]` - Major version (x.0.0)
+- `[minor]` or `[feature]` or `[feat]` - Minor version (0.x.0)
+- `[patch]` or default - Patch version (0.0.x)
 
 ## Architecture
 
 ```
-space-cli/                        # New generic repo
-├── cmd/space/                    # CLI binary
-├── pkg/
-│   ├── config/                   # Configuration system
-│   ├── provider/                 # Docker provider detection (OrbStack, Docker Desktop)
-│   ├── compose/                  # Docker Compose operations
-│   ├── ports/                    # Port allocation
-│   ├── project/                  # Project naming
-│   ├── sandbox/                  # Service orchestration (Docker)
-│   ├── vm/                       # VM management
-│   │   ├── manager.go            # VM lifecycle
-│   │   └── provider/             # VM provider implementations
-│   │       ├── lima.go           # Lima provider
-│   │       └── orbstack.go       # OrbStack VM provider
-│   └── database/                 # Database operations
-└── examples/                     # Example configs
-
-propel-cli/                       # Existing repo (becomes thin wrapper)
+space-cli/
+├── cmd/space/           # CLI entry point
 ├── internal/
-│   ├── propel/                   # Propel-specific logic ONLY
-│   │   ├── config.go             # Default Propel config
-│   │   ├── constants.go          # Service names (api-server, app, etc.)
-│   │   └── database.go           # River integration
-│   ├── commands/                 # CLI commands (wraps space-cli)
-│   └── util/                     # Propel utilities (PR copy, etc.)
-└── go.mod                        # imports space-cli
+│   ├── cli/             # Command implementations
+│   ├── dns/             # Embedded DNS server
+│   ├── hooks/           # Hook execution system
+│   └── provider/        # Docker provider detection
+├── pkg/
+│   └── config/          # Configuration system
+└── examples/            # Example configurations
 ```
 
-## Integration Strategy
+## License
 
-Propel-CLI will use space-cli as a Go module:
-
-```go
-import (
-    spacecli "github.com/yourorg/space-cli/pkg/sandbox"
-    "propel-cli/internal/propel"
-)
-
-func NewSandboxCommand() *cobra.Command {
-    return &cobra.Command{
-        RunE: func(cmd *cobra.Command, args []string) error {
-            // Create sandbox with Propel defaults
-            config := propel.DefaultConfig()
-            sb, err := spacecli.New(ctx, workDir, config)
-            // ...
-        },
-    }
-}
-```
-
-## Benefits
-
-### For Propel
-- **Lighter codebase**: ~40% reduction by offloading generic code
-- **Focused development**: Concentrate on Propel-specific features
-- **Better separation**: Clear boundary between generic and proprietary
-- **Easier testing**: Generic code tested independently
-
-### For Space CLI
-- **Reusable**: Any team with Docker Compose or VM needs can use it
-- **Open source potential**: Could be published for wider use
-- **Better quality**: Designed for multiple use cases from day one
-- **Complete solution**: Both Docker and VM workflows in one tool
-- **Community contributions**: External developers could contribute
-
-## Timeline
-
-- **Week 1**: Repository setup + config system
-- **Week 2**: Extract Docker Compose packages
-- **Week 3**: Extract VM management + build CLI + documentation
-- **Week 4**: Integrate with propel-cli + full testing
-
-**Total: 4 weeks** for complete migration
-
-## Command Examples
-
-### Docker-based Development
-```bash
-space up                # Start services in Docker
-space logs api          # View service logs
-space shell app         # Open shell in container
-space db shell          # Open database shell
-```
-
-### VM-based Development
-```bash
-space vm start          # Create and start VM
-space vm status         # Check VM status
-space vm shell          # Open shell in VM
-space up                # Start services inside VM
-```
-
-### Database Operations
-```bash
-space db create mydb    # Create database
-space db migrate        # Run migrations
-space db seed           # Seed database
-```
-
-## Next Steps
-
-1. ✅ Create prototypes (this directory)
-2. Review and approve plan
-3. Create `space-cli` repository
-4. Start Phase 1: Repository setup
-5. Follow extraction checklist
-6. Test with sample projects
-7. Integrate with propel-cli
-8. Release v1.0.0
-
-## Questions?
-
-See:
-- `../MIGRATION_PLAN.md` for detailed phases and timeline
-- `EXTRACTION_CHECKLIST.md` for what moves where
-- `ARCHITECTURE.md` for architecture diagrams
-- `examples/` for configuration examples
+MIT
