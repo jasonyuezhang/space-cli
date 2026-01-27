@@ -137,7 +137,7 @@ func runEnhancedPS(ctx context.Context, workDir string, cfg *config.Config, proj
 }
 
 // runPsCommand executes the docker compose ps command (legacy/quiet mode)
-func runPsCommand(ctx context.Context, workDir, projectName string, providerType provider.Provider, quiet, noTrunc bool) error {
+func runPsCommand(_ context.Context, workDir, projectName string, _ provider.Provider, quiet, noTrunc bool) error {
 	// Load config to get compose files
 	loader, err := config.NewLoader(workDir)
 	if err != nil {
@@ -445,7 +445,7 @@ func outputJSON(services []ServiceStatus) error {
 }
 
 // outputTable outputs service status as a formatted table
-func outputTable(services []ServiceStatus, useDNS bool, cfg *config.Config) error {
+func outputTable(services []ServiceStatus, useDNS bool, _ *config.Config) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 	defer w.Flush()
 

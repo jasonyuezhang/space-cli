@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -522,22 +520,6 @@ func TestNewPsCommand(t *testing.T) {
 	if cmd.Flags().Lookup("no-trunc") == nil {
 		t.Error("expected 'no-trunc' flag")
 	}
-}
-
-// TestCaptureStdout captures stdout for testing
-func captureStdout(f func() error) (string, error) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err := f()
-
-	w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	return buf.String(), err
 }
 
 // TestErrorHandlingNoContainers tests error handling when no containers exist
