@@ -25,7 +25,7 @@ LDFLAGS=-ldflags "-X github.com/happy-sdk/space-cli/internal/cli.Version=$(VERSI
 	-X github.com/happy-sdk/space-cli/internal/cli.BuildTime=$(BUILD_TIME) \
 	-X github.com/happy-sdk/space-cli/internal/cli.GitCommit=$(GIT_COMMIT)"
 
-.PHONY: all build install clean test deps help version version-patch version-minor version-major
+.PHONY: all build install clean test test-e2e test-e2e-verbose test-all deps help version version-patch version-minor version-major e2e-clean
 
 # Default target
 all: build
@@ -104,6 +104,33 @@ version-minor:
 ## version-major: Bump major version
 version-major:
 	@./scripts/version.sh major
+
+## test-e2e: Run e2e tests (requires Docker)
+test-e2e: build
+	@echo "Running e2e tests..."
+	@echo "Note: This requires Docker to be running"
+	SPACE_BIN=$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME) $(GOTEST) -v -tags=e2e -timeout 10m ./e2e/...
+
+## test-e2e-verbose: Run e2e tests with verbose output
+test-e2e-verbose: build
+	@echo "Running e2e tests (verbose)..."
+	SPACE_BIN=$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME) $(GOTEST) -v -tags=e2e -timeout 10m -count=1 ./e2e/...
+
+## test-e2e-single: Run a single e2e test (use TEST=TestName)
+test-e2e-single: build
+	@echo "Running single e2e test: $(TEST)"
+	SPACE_BIN=$(CURDIR)/$(BUILD_DIR)/$(BINARY_NAME) $(GOTEST) -v -tags=e2e -timeout 5m -run '$(TEST)' ./e2e/...
+
+## test-all: Run all tests (unit and e2e)
+test-all: test test-e2e
+	@echo "All tests complete!"
+
+## e2e-clean: Clean up any leftover e2e test containers
+e2e-clean:
+	@echo "Cleaning up e2e test containers..."
+	@docker ps -a --filter "name=e2e-" -q | xargs -r docker rm -f 2>/dev/null || true
+	@docker network ls --filter "name=e2e-" -q | xargs -r docker network rm 2>/dev/null || true
+	@echo "E2E cleanup complete"
 
 ## help: Show this help
 help:

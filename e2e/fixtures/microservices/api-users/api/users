@@ -1,0 +1,9 @@
+{
+  "users": [
+    {"id": 1, "email": "alice@example.com", "name": "Alice Johnson"},
+    {"id": 2, "email": "bob@example.com", "name": "Bob Smith"},
+    {"id": 3, "email": "charlie@example.com", "name": "Charlie Brown"}
+  ],
+  "total": 3,
+  "service": "api-users"
+}
