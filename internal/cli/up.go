@@ -32,6 +32,9 @@ func newUpCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 
+			// Get verbose flag
+			verbose, _ := cmd.Flags().GetBool("verbose")
+
 			// Get working directory
 			workDir := Workdir
 			if workDir == "." {
@@ -207,10 +210,8 @@ func newUpCommand() *cobra.Command {
 			}
 			fmt.Println()
 
-			// Run post-up hooks (external scripts)
-			if useDNS {
-				runScriptHooks(ctx, hooks.PostUp, workDir, projectName, cfg)
-			}
+			// Run post-up hooks (external scripts) - always run regardless of DNS mode
+			runScriptHooks(ctx, hooks.PostUp, workDir, projectName, cfg, useDNS, verbose)
 
 			// Show access information
 			if useDNS {
@@ -243,6 +244,7 @@ func newUpCommand() *cobra.Command {
 	cmd.Flags().BoolP("detach", "d", true, "Run services in detached mode")
 	cmd.Flags().Bool("build", false, "Build images before starting")
 	cmd.Flags().Bool("force-recreate", false, "Recreate containers even if config hasn't changed")
+	cmd.Flags().BoolP("verbose", "v", false, "Verbose output for debugging hooks and execution")
 
 	return cmd
 }
@@ -659,38 +661,104 @@ func cleanupDNSServer(ctx context.Context) {
 }
 
 // runScriptHooks runs external hook scripts for a given event
-func runScriptHooks(ctx context.Context, event hooks.EventType, workDir, projectName string, cfg *config.Config) {
-	// Create script executor
-	executor := hooks.NewScriptExecutor(workDir)
-
+func runScriptHooks(ctx context.Context, event hooks.EventType, workDir, projectName string, cfg *config.Config, dnsEnabled, verbose bool) {
 	// Check if hooks directory exists
 	hooksDir := filepath.Join(workDir, ".space", "hooks", string(event)+".d")
 	if _, err := os.Stat(hooksDir); os.IsNotExist(err) {
+		if verbose {
+			fmt.Printf("   [verbose] No hooks directory found: %s\n", hooksDir)
+		}
 		return // No hooks directory for this event
 	}
 
+	// Create script executor
+	executor := hooks.NewScriptExecutor(workDir)
+
 	fmt.Println()
 	fmt.Printf("🪝 Running %s hooks...\n", event)
+
+	if verbose {
+		fmt.Printf("   [verbose] Hooks directory: %s\n", hooksDir)
+	}
 
 	// Build hook context
 	hookCtx := &hooks.HookContext{
 		WorkDir:     workDir,
 		ProjectName: projectName,
-		DNSEnabled:  true,
+		DNSEnabled:  dnsEnabled,
 		BaseDomain:  "space.local",
 		Hash:        dns.GenerateDirectoryHash(workDir),
 		Services:    make(map[string]*hooks.ServiceInfo),
 		Metadata:    make(map[string]interface{}),
 	}
 
-	// Add services from config with DNS names
+	if verbose {
+		fmt.Printf("   [verbose] Hook context:\n")
+		fmt.Printf("             WorkDir: %s\n", hookCtx.WorkDir)
+		fmt.Printf("             ProjectName: %s\n", hookCtx.ProjectName)
+		fmt.Printf("             DNSEnabled: %t\n", hookCtx.DNSEnabled)
+		fmt.Printf("             Hash: %s\n", hookCtx.Hash)
+	}
+
+	// Add services from config with DNS names or localhost
 	for name, svc := range cfg.Services {
-		dnsName := fmt.Sprintf("%s-%s.%s", name, hookCtx.Hash, hookCtx.BaseDomain)
+		var serviceHost string
+		var serviceURL string
+		if dnsEnabled {
+			dnsName := fmt.Sprintf("%s-%s.%s", name, hookCtx.Hash, hookCtx.BaseDomain)
+			serviceHost = dnsName
+			serviceURL = fmt.Sprintf("http://%s:%d", dnsName, svc.Port)
+		} else {
+			// Non-DNS mode: use localhost with external port
+			serviceHost = "localhost"
+			port := svc.ExternalPort
+			if port == 0 {
+				port = svc.Port
+			}
+			serviceURL = fmt.Sprintf("http://localhost:%d", port)
+		}
+
 		hookCtx.Services[name] = &hooks.ServiceInfo{
 			Name:         name,
-			DNSName:      dnsName,
+			DNSName:      serviceHost,
 			InternalPort: svc.Port,
-			URL:          fmt.Sprintf("http://%s:%d", dnsName, svc.Port),
+			ExternalPort: svc.ExternalPort,
+			URL:          serviceURL,
+		}
+
+		if verbose {
+			fmt.Printf("   [verbose] Service '%s': host=%s, port=%d, url=%s\n",
+				name, serviceHost, svc.Port, serviceURL)
+		}
+	}
+
+	if verbose && len(cfg.Services) == 0 {
+		fmt.Printf("   [verbose] No services defined in config - hooks may not have service info\n")
+		fmt.Printf("   [verbose] Consider creating a .space.yaml with service definitions\n")
+	}
+
+	// List scripts that will be executed
+	if verbose {
+		entries, err := os.ReadDir(hooksDir)
+		if err == nil {
+			fmt.Printf("   [verbose] Scripts in directory:\n")
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					info, _ := entry.Info()
+					executable := info != nil && info.Mode()&0111 != 0
+					status := "skipped (not executable)"
+					if executable {
+						status = "will execute"
+					}
+					if strings.HasSuffix(entry.Name(), ".md") || strings.HasSuffix(entry.Name(), ".txt") {
+						status = "skipped (documentation)"
+					}
+					if entry.Name() == ".gitkeep" {
+						status = "skipped (gitkeep)"
+					}
+					fmt.Printf("             %s - %s\n", entry.Name(), status)
+				}
+			}
 		}
 	}
 
