@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os/exec"
+	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -46,8 +50,34 @@ func newDNSStatusCommand() *cobra.Command {
 			fmt.Printf("   Domain:       *.space.local\n")
 			fmt.Printf("   Resolver:     /etc/resolver/space.local\n")
 			fmt.Println()
+
+			// List all registered DNS records
+			records, err := listDNSRecords(context.Background())
+			if err != nil {
+				fmt.Printf("⚠️  Could not list DNS records: %v\n", err)
+			} else if len(records) > 0 {
+				fmt.Println("📋 Registered DNS Records:")
+				fmt.Println()
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+				fmt.Fprintln(w, "HOSTNAME\tIP ADDRESS\tSERVICE\tPROJECT")
+				fmt.Fprintln(w, "--------\t----------\t-------\t-------")
+				for _, record := range records {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+						record.Hostname,
+						record.IPAddress,
+						record.ServiceName,
+						record.ProjectName,
+					)
+				}
+				w.Flush()
+				fmt.Println()
+			} else {
+				fmt.Println("📋 No DNS records registered (no containers running)")
+				fmt.Println()
+			}
+
 			fmt.Println("💡 Test DNS resolution:")
-			fmt.Printf("   dig @%s postgres.space.local\n", state.Address)
+			fmt.Printf("   dig @%s <hostname>\n", state.Address)
 
 			return nil
 		},
@@ -155,4 +185,83 @@ func newDNSRestartCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// DNSRecord represents a registered DNS record
+type DNSRecord struct {
+	Hostname    string
+	IPAddress   string
+	ServiceName string
+	ProjectName string
+}
+
+// listDNSRecords lists all DNS records from running Docker containers
+func listDNSRecords(ctx context.Context) ([]DNSRecord, error) {
+	// Get all running containers with their labels and IPs
+	cmd := exec.CommandContext(ctx, "docker", "ps",
+		"--format", "{{.Names}}|{{.Label \"com.docker.compose.service\"}}|{{.Label \"com.docker.compose.project\"}}|{{.Label \"com.docker.compose.project.working_dir\"}}")
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	records := make([]DNSRecord, 0, len(lines))
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) < 4 {
+			continue
+		}
+
+		containerName := parts[0]
+		serviceName := parts[1]
+		projectName := parts[2]
+		workDir := parts[3]
+
+		// Skip containers without compose labels
+		if serviceName == "" || workDir == "" {
+			continue
+		}
+
+		// Get container IP
+		ip, err := getContainerIP(ctx, containerName)
+		if err != nil || ip == "" {
+			continue
+		}
+
+		// Generate DNS hostname with hash
+		hostname := generateDNSDomain(serviceName, workDir)
+
+		records = append(records, DNSRecord{
+			Hostname:    hostname,
+			IPAddress:   ip,
+			ServiceName: serviceName,
+			ProjectName: projectName,
+		})
+	}
+
+	return records, nil
+}
+
+// getContainerIP gets the IP address of a container
+func getContainerIP(ctx context.Context, containerName string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "inspect",
+		"--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+		containerName)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(output)), nil
 }
